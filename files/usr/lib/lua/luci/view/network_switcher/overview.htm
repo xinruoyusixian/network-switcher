@@ -11,71 +11,119 @@
         <legend>服务控制</legend>
         <div id="service-control">
             <div class="cbi-value">
-                <label class="cbi-value-title">服务状态</label>
+                <label class="cbi-value-title">启用服务</label>
                 <div class="cbi-value-field">
-                    <span id="service-status">-</span>
-                    <button class="cbi-button cbi-button-apply" onclick="serviceControl('start')" id="start-btn" style="margin-left: 10px;">
-                        启动
-                    </button>
-                    <button class="cbi-button cbi-button-reset" onclick="serviceControl('stop')" id="stop-btn" style="margin-left: 5px;">
-                        停止
-                    </button>
-                    <button class="cbi-button cbi-button-reload" onclick="serviceControl('restart')" id="restart-btn" style="margin-left: 5px;">
-                        重启
-                    </button>
+                    <input type="checkbox" id="enable-service" onchange="toggleService()" />
+                    <label for="enable-service">启用网络切换服务</label>
+                    <div style="margin-top: 5px;">
+                        <button class="cbi-button cbi-button-reload" onclick="refreshStatus()" style="margin-right: 5px;">
+                            刷新状态
+                        </button>
+                        <button class="cbi-button cbi-button-reset" onclick="restartService()">
+                            重启服务
+                        </button>
+                    </div>
                 </div>
             </div>
             
             <div class="cbi-value">
-                <label class="cbi-value-title">当前接口</label>
+                <label class="cbi-value-title">当前互联网出口</label>
                 <div class="cbi-value-field">
-                    <span id="current-interface">-</span>
+                    <span id="current-interface" style="font-weight: bold;">-</span>
+                </div>
+            </div>
+            
+            <div class="cbi-value">
+                <label class="cbi-value-title">服务状态</label>
+                <div class="cbi-value-field">
+                    <span id="service-status">-</span>
                 </div>
             </div>
         </div>
     </fieldset>
     
     <fieldset class="cbi-section">
-        <legend>快速操作</legend>
+        <legend>网络操作</legend>
         <div class="cbi-value">
+            <label class="cbi-value-title">手动切换</label>
             <div class="cbi-value-field">
-                <button class="cbi-button cbi-button-reload" onclick="refreshStatus()">
-                    刷新状态
-                </button>
-                <button class="cbi-button cbi-button-positive" onclick="runTest()">
-                    测试连通性
-                </button>
-                <button class="cbi-button cbi-button-action" onclick="switchInterface('auto')">
-                    自动切换
+                <select id="interface-select" style="min-width: 150px; margin-right: 10px;">
+                    <option value="">选择接口...</option>
+                </select>
+                <button class="cbi-button cbi-button-action" onclick="switchInterface()" id="switch-btn">
+                    切换到选定接口
                 </button>
             </div>
         </div>
         
         <div class="cbi-value">
-            <label class="cbi-value-title">手动切换</label>
-            <div class="cbi-value-field" id="interface-buttons">
-                <!-- 接口按钮将通过JavaScript动态生成 -->
+            <label class="cbi-value-title">自动切换</label>
+            <div class="cbi-value-field">
+                <button class="cbi-button cbi-button-positive" onclick="autoSwitch()">
+                    执行自动切换
+                </button>
+                <span style="margin-left: 10px; color: #666;">根据接口优先级自动选择最佳接口</span>
+            </div>
+        </div>
+        
+        <div class="cbi-value">
+            <label class="cbi-value-title">网络测试</label>
+            <div class="cbi-value-field">
+                <button class="cbi-button cbi-button-apply" onclick="testConnectivity()">
+                    测试网络连通性
+                </button>
+                <span style="margin-left: 10px; color: #666;">测试所有已配置接口的网络连通性</span>
             </div>
         </div>
     </fieldset>
     
     <fieldset class="cbi-section">
         <legend>操作结果</legend>
-        <pre id="operation-result" style="min-height: 120px; background: #f5f5f5; padding: 10px; border-radius: 3px; font-family: monospace; white-space: pre-wrap; font-size: 12px;"></pre>
+        <pre id="operation-result" style="min-height: 150px; background: #f5f5f5; padding: 10px; border-radius: 3px; font-family: monospace; white-space: pre-wrap; font-size: 12px; line-height: 1.4;"></pre>
     </fieldset>
     
     <fieldset class="cbi-section">
         <legend>详细状态</legend>
-        <pre id="status-output" style="min-height: 300px; background: #f5f5f5; padding: 10px; border-radius: 3px; font-family: monospace; white-space: pre-wrap; font-size: 12px;"></pre>
+        <pre id="status-output" style="min-height: 300px; background: #f5f5f5; padding: 10px; border-radius: 3px; font-family: monospace; white-space: pre-wrap; font-size: 12px; line-height: 1.4;"></pre>
     </fieldset>
 </div>
 
 <script>
-// 页面加载时获取状态
+// 页面加载时初始化
 window.onload = function() {
     refreshStatus();
+    loadConfiguredInterfaces();
 };
 
+// 加载已配置的接口
+function loadConfiguredInterfaces() {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '<%=luci.dispatcher.build_url("admin/services/network_switcher/get_configured_interfaces")%>', true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4 && xhr.status === 200) {
+            var interfaces = JSON.parse(xhr.responseText);
+            var select = document.getElementById('interface-select');
+            
+            // 清空现有选项（保留第一个）
+            while (select.options.length > 1) {
+                select.remove(1);
+            }
+            
+            // 添加接口选项
+            interfaces.forEach(function(iface) {
+                if (iface.trim() !== '') {
+                    var option = document.createElement('option');
+                    option.value = iface;
+                    option.textContent = iface;
+                    select.appendChild(option);
+                }
+            });
+        }
+    };
+    xhr.send();
+}
+
+// 刷新状态
 function refreshStatus() {
     showOperationResult("正在刷新状态...");
     
@@ -91,13 +139,10 @@ function refreshStatus() {
                 
                 // 从状态输出中提取当前接口
                 var statusText = response.status_output;
-                var currentInterfaceMatch = statusText.match(/当前默认出口:\s*(\S+)/);
+                var currentInterfaceMatch = statusText.match(/当前互联网出口:\s*(\S+)/);
                 if (currentInterfaceMatch) {
                     document.getElementById('current-interface').textContent = currentInterfaceMatch[1];
                 }
-                
-                // 生成接口切换按钮
-                generateInterfaceButtons(statusText);
                 
                 // 更新详细状态输出
                 document.getElementById('status-output').textContent = statusText;
@@ -110,51 +155,26 @@ function refreshStatus() {
     xhr.send();
 }
 
+// 更新服务状态显示
 function updateServiceStatus(serviceStatus) {
     var statusElement = document.getElementById('service-status');
-    var startBtn = document.getElementById('start-btn');
-    var stopBtn = document.getElementById('stop-btn');
-    var restartBtn = document.getElementById('restart-btn');
+    var enableCheckbox = document.getElementById('enable-service');
     
     if (serviceStatus === 'running') {
         statusElement.innerHTML = '<span style="color: green">● 运行中</span>';
-        startBtn.disabled = true;
-        stopBtn.disabled = false;
-        restartBtn.disabled = false;
+        enableCheckbox.checked = true;
     } else {
         statusElement.innerHTML = '<span style="color: red">● 已停止</span>';
-        startBtn.disabled = false;
-        stopBtn.disabled = true;
-        restartBtn.disabled = true;
+        enableCheckbox.checked = false;
     }
 }
 
-function generateInterfaceButtons(statusText) {
-    var buttonsContainer = document.getElementById('interface-buttons');
-    buttonsContainer.innerHTML = '';
+// 切换服务状态
+function toggleService() {
+    var enableCheckbox = document.getElementById('enable-service');
+    var action = enableCheckbox.checked ? 'start' : 'stop';
     
-    // 从状态文本中提取接口名称
-    var interfaceRegex = /--- (\w+) \(优先级:/g;
-    var match;
-    var interfaces = [];
-    
-    while ((match = interfaceRegex.exec(statusText)) !== null) {
-        interfaces.push(match[1]);
-    }
-    
-    // 为每个接口生成按钮
-    interfaces.forEach(function(iface) {
-        var button = document.createElement('button');
-        button.className = 'cbi-button cbi-button-action';
-        button.style.marginRight = '5px';
-        button.textContent = '切换到 ' + iface;
-        button.onclick = function() { switchInterface(iface); };
-        buttonsContainer.appendChild(button);
-    });
-}
-
-function serviceControl(action) {
-    showOperationResult("正在执行服务操作: " + action + "...");
+    showOperationResult(enableCheckbox.checked ? "正在启动服务..." : "正在停止服务...");
     
     var xhr = new XMLHttpRequest();
     xhr.open('GET', '<%=luci.dispatcher.build_url("admin/services/network_switcher/service_control")%>?action=' + action, true);
@@ -167,41 +187,47 @@ function serviceControl(action) {
                 setTimeout(refreshStatus, 2000);
             } else {
                 showOperationResult("服务操作失败: " + xhr.status);
+                // 操作失败，恢复复选框状态
+                enableCheckbox.checked = !enableCheckbox.checked;
             }
         }
     };
     xhr.send();
 }
 
-function runTest() {
-    showOperationResult("正在测试网络连通性...");
+// 重启服务
+function restartService() {
+    showOperationResult("正在重启服务...");
     
     var xhr = new XMLHttpRequest();
-    xhr.open('GET', '<%=luci.dispatcher.build_url("admin/services/network_switcher/test")%>', true);
+    xhr.open('GET', '<%=luci.dispatcher.build_url("admin/services/network_switcher/service_control")%>?action=restart', true);
     xhr.onreadystatechange = function() {
         if (xhr.readyState === 4) {
             if (xhr.status === 200) {
                 var response = JSON.parse(xhr.responseText);
-                showOperationResult(response.output);
-                // 测试完成后刷新状态
-                setTimeout(refreshStatus, 1000);
+                showOperationResult(response.message);
+                // 操作完成后刷新状态
+                setTimeout(refreshStatus, 3000);
             } else {
-                showOperationResult("测试执行失败: " + xhr.status);
+                showOperationResult("服务重启失败: " + xhr.status);
             }
         }
     };
     xhr.send();
 }
 
-function switchInterface(interface) {
-    if (interface === 'auto') {
-        if (!confirm('确定要执行自动切换吗?')) {
-            return;
-        }
-    } else {
-        if (!confirm('确定要切换到 ' + interface + '?')) {
-            return;
-        }
+// 手动切换接口
+function switchInterface() {
+    var select = document.getElementById('interface-select');
+    var interface = select.value;
+    
+    if (!interface) {
+        alert('请选择要切换的接口');
+        return;
+    }
+    
+    if (!confirm('确定要切换到接口 "' + interface + '" 吗?')) {
+        return;
     }
     
     showOperationResult("正在切换到 " + interface + "...");
@@ -223,6 +249,53 @@ function switchInterface(interface) {
     xhr.send();
 }
 
+// 自动切换
+function autoSwitch() {
+    if (!confirm('确定要执行自动切换吗？系统将根据接口优先级自动选择最佳接口。')) {
+        return;
+    }
+    
+    showOperationResult("正在执行自动切换...");
+    
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '<%=luci.dispatcher.build_url("admin/services/network_switcher/switch")%>?interface=auto', true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4) {
+            if (xhr.status === 200) {
+                var response = JSON.parse(xhr.responseText);
+                showOperationResult(response.message);
+                // 切换完成后刷新状态
+                setTimeout(refreshStatus, 2000);
+            } else {
+                showOperationResult("自动切换失败: " + xhr.status);
+            }
+        }
+    };
+    xhr.send();
+}
+
+// 测试网络连通性
+function testConnectivity() {
+    showOperationResult("正在测试网络连通性...");
+    
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '<%=luci.dispatcher.build_url("admin/services/network_switcher/test")%>', true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4) {
+            if (xhr.status === 200) {
+                var response = JSON.parse(xhr.responseText);
+                showOperationResult(response.output);
+                // 测试完成后刷新状态
+                setTimeout(refreshStatus, 1000);
+            } else {
+                showOperationResult("测试执行失败: " + xhr.status);
+            }
+        }
+    };
+    xhr.send();
+}
+
+// 显示操作结果
 function showOperationResult(message) {
     var resultElement = document.getElementById('operation-result');
     resultElement.textContent = message;
