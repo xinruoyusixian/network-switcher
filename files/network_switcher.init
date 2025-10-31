@@ -28,5 +28,12 @@ reload_service() {
 }
 
 service_running() {
-    pgrep -f "network_switcher daemon" >/dev/null
+    /usr/bin/network_switcher status >/dev/null 2>&1
+}
+
+boot() {
+    # 创建必要的目录和文件
+    mkdir -p /var/lock /var/log /var/state /var/run
+    touch /var/log/network_switcher.log
+    chmod 644 /var/log/network_switcher.log
 }
