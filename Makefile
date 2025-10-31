@@ -1,10 +1,10 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=network-switcher
-PKG_VERSION:=1.2.0
+PKG_VERSION:=1.1.1
 PKG_RELEASE:=1
 
-PKG_MAINTAINER:=myxw@gmial.com
+PKG_MAINTAINER:=Your Name <your@email.com>
 PKG_LICENSE:=GPL-2.0
 
 include $(INCLUDE_DIR)/package.mk
