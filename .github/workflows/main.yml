@@ -1,63 +1,132 @@
-# OpenWrt Network Switcher Plugin
-# Main Makefile
+name: Build OpenWrt Network Switcher Plugin
 
-include $(TOPDIR)/rules.mk
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+  release:
+    types: [ published ]
+  workflow_dispatch:
 
-PKG_NAME:=network-switcher
-PKG_VERSION:=1.0.0
-PKG_RELEASE:=1
+env:
+  PACKAGE_NAME: network-switcher
+  PACKAGE_VERSION: 1.0.0
 
-PKG_MAINTAINER:=Your Name <your@email.com>
-PKG_LICENSE:=GPL-2.0
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86-64, aarch64_generic]
+        include:
+          - target: x86-64
+            sdk_url: https://downloads.immortalwrt.org/releases/21.02.5/targets/x86/64/immortalwrt-sdk-21.02.5-x86-64_gcc-8.4.0_musl.Linux-x86_64.tar.xz
+          - target: aarch64_generic
+            sdk_url: https://downloads.immortalwrt.org/releases/21.02.5/targets/rockchip/armv8/immortalwrt-sdk-21.02.5-rockchip-armv8_gcc-8.4.0_musl.Linux-x86_64.tar.xz
 
-include $(INCLUDE_DIR)/package.mk
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-define Package/network-switcher
-  SECTION:=net
-  CATEGORY:=Network
-  SUBMENU:=Routing and Redirection
-  TITLE:=Intelligent Network Interface Switcher
-  DEPENDS:=+lua +luci-lib-json +luci-lib-nixio
-  PKGARCH:=all
-endef
+    - name: Setup build environment
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          libncurses5-dev \
+          libncursesw5-dev \
+          zlib1g-dev \
+          gawk \
+          git \
+          gettext \
+          libssl-dev \
+          xsltproc \
+          wget \
+          unzip \
+          python3 \
+          python3-distutils
 
-define Package/network-switcher/description
-  An intelligent network interface switcher with LuCI web interface support.
-  Provides automatic failover between WAN and WWAN interfaces.
-endef
+    - name: Download and extract SDK
+      run: |
+        mkdir -p sdk
+        cd sdk
+        wget ${{ matrix.sdk_url }}
+        tar -xf *.tar.xz --strip-components=1
+        cd ..
 
-define Build/Configure
-endef
+    - name: Prepare package directory in SDK
+      run: |
+        mkdir -p sdk/package/${{ env.PACKAGE_NAME }}
+        cp Makefile sdk/package/${{ env.PACKAGE_NAME }}/
+        cp -r files sdk/package/${{ env.PACKAGE_NAME }}/
+        echo "=== Package structure ==="
+        find sdk/package/${{ env.PACKAGE_NAME }} -type f | sort
 
-define Build/Compile
-endef
+    - name: Configure SDK
+      run: |
+        cd sdk
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
 
-define Package/network-switcher/install
-	$(INSTALL_DIR) $(1)/etc/init.d
-	$(INSTALL_DIR) $(1)/etc/config
-	$(INSTALL_DIR) $(1)/usr/bin
-	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/controller
-	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/model/cbi/network_switcher
-	$(INSTALL_DIR) $(1)/usr/lib/lua/luci/view/network_switcher
-	
-	$(INSTALL_BIN) ./files/network_switcher.init $(1)/etc/init.d/network_switcher
-	$(INSTALL_BIN) ./files/network_switcher.sh $(1)/usr/bin/network_switcher
-	$(INSTALL_CONF) ./files/network_switcher.config $(1)/etc/config/network_switcher
-	
-	$(INSTALL_DATA) ./files/usr/lib/lua/luci/controller/network_switcher.lua $(1)/usr/lib/lua/luci/controller/
-	$(INSTALL_DATA) ./files/usr/lib/lua/luci/model/cbi/network_switcher/network_switcher.lua $(1)/usr/lib/lua/luci/model/cbi/network_switcher/
-	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/network_switcher/overview.htm $(1)/usr/lib/lua/luci/view/network_switcher/
-	$(INSTALL_DATA) ./files/usr/lib/lua/luci/view/network_switcher/log.htm $(1)/usr/lib/lua/luci/view/network_switcher/
-endef
+    - name: Configure package selection
+      run: |
+        cd sdk
+        echo "CONFIG_TARGET_${{ matrix.target }}=y" > .config
+        echo "CONFIG_PACKAGE_${{ env.PACKAGE_NAME }}=m" >> .config
 
-define Package/network-switcher/postinst
-#!/bin/sh
-if [ -z "$${IPKG_INSTROOT}" ]; then
-    echo "Enabling network_switcher service..."
-    /etc/init.d/network_switcher enable
-    echo "You can configure Network Switcher in LuCI: Services -> Network Switcher"
-fi
-exit 0
-endef
+    - name: Build package
+      run: |
+        cd sdk
+        make defconfig
+        echo "Starting package compilation..."
+        make package/${{ env.PACKAGE_NAME }}/compile -j$(nproc) V=sc
 
-$(eval $(call BuildPackage,network-switcher))
+    - name: Collect artifacts
+      run: |
+        mkdir -p artifacts/${{ matrix.target }}
+        find sdk/bin -name "*${{ env.PACKAGE_NAME }}*.ipk" -exec cp {} artifacts/${{ matrix.target }} \;
+        echo "=== Built IPK files ==="
+        ls -la artifacts/${{ matrix.target }}/
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.PACKAGE_NAME }}-${{ matrix.target }}
+        path: artifacts/${{ matrix.target }}/
+        retention-days: 30
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: dist
+
+    - name: Display structure
+      run: ls -R dist
+
+    - name: Create release package
+      run: |
+        mkdir -p release_packages
+        find dist -name "*.ipk" -exec cp {} release_packages/ \;
+        cd release_packages
+        echo "Network Switcher Plugin - Built Packages" > PACKAGES.txt
+        echo "Version: ${{ env.PACKAGE_VERSION }}" >> PACKAGES.txt
+        echo "Build Date: $(date)" >> PACKAGES.txt
+        echo "" >> PACKAGES.txt
+        echo "Available packages:" >> PACKAGES.txt
+        for ipk in *.ipk; do
+          echo "- $ipk" >> PACKAGES.txt
+        done
+        cd ..
+        zip -r ${{ env.PACKAGE_NAME }}-${{ github.event.release.tag_name }}.zip release_packages/
+
+    - name: Upload to release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ${{ env.PACKAGE_NAME }}-${{ github.event.release.tag_name }}.zip
