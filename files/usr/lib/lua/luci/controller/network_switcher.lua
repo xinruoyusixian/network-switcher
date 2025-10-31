@@ -1,3 +1,4 @@
+-- 文件: files/usr/lib/lua/luci/controller/network_switcher.lua
 module("luci.controller.network_switcher", package.seeall)
 
 function index()
@@ -164,22 +165,14 @@ function action_get_configured_interfaces()
     local interface_list = {}
     
     for line in interfaces:gmatch("[^\r\n]+") do
-        if line ~= "" and line ~= "wan" then  -- 过滤掉空行和重复的wan
+        if line ~= "" then
             table.insert(interface_list, line)
         end
     end
     
-    -- 确保至少包含wan接口
-    local has_wan = false
-    for _, iface in ipairs(interface_list) do
-        if iface == "wan" then
-            has_wan = true
-            break
-        end
-    end
-    
-    if not has_wan then
-        table.insert(interface_list, 1, "wan")
+    -- 如果没有获取到接口，添加默认的wan接口
+    if #interface_list == 0 then
+        table.insert(interface_list, "wan")
     end
     
     lucihttp.prepare_content("application/json")
