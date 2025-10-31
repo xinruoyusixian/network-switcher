@@ -53,6 +53,9 @@
                 <button class="cbi-button cbi-button-action" onclick="switchInterface()" id="switch-btn">
                     切换到选定接口
                 </button>
+                <button class="cbi-button cbi-button-reload" onclick="loadConfiguredInterfaces()" style="margin-left: 5px;" title="刷新接口列表">
+                    ↻
+                </button>
             </div>
         </div>
         
@@ -102,31 +105,45 @@ function loadConfiguredInterfaces() {
     xhr.onreadystatechange = function() {
         if (xhr.readyState === 4 && xhr.status === 200) {
             var interfaces = JSON.parse(xhr.responseText);
-            var select = document.getElementById('interface-select');
-            
-            // 清空现有选项（保留第一个）
-            while (select.options.length > 1) {
-                select.remove(1);
-            }
-            
-            // 添加接口选项
-            interfaces.forEach(function(iface) {
-                if (iface.trim() !== '') {
-                    var option = document.createElement('option');
-                    option.value = iface;
-                    option.textContent = iface;
-                    select.appendChild(option);
-                }
-            });
+            updateInterfaceSelect(interfaces);
         }
     };
     xhr.send();
 }
 
-// 刷新状态
-function refreshStatus() {
-    showOperationResult("正在刷新状态...");
+// 更新接口选择下拉框
+function updateInterfaceSelect(interfaces) {
+    var select = document.getElementById('interface-select');
+    var currentValue = select.value;
     
+    // 清空现有选项（保留第一个）
+    while (select.options.length > 1) {
+        select.remove(1);
+    }
+    
+    // 添加接口选项
+    interfaces.forEach(function(iface) {
+        if (iface.trim() !== '') {
+            var option = document.createElement('option');
+            option.value = iface;
+            option.textContent = iface;
+            select.appendChild(option);
+        }
+    });
+    
+    // 恢复之前选中的值（如果还存在）
+    if (currentValue) {
+        for (var i = 0; i < select.options.length; i++) {
+            if (select.options[i].value === currentValue) {
+                select.selectedIndex = i;
+                break;
+            }
+        }
+    }
+}
+
+// 刷新状态（不覆盖操作结果）
+function refreshStatus() {
     var xhr = new XMLHttpRequest();
     xhr.open('GET', '<%=luci.dispatcher.build_url("admin/services/network_switcher/status")%>', true);
     xhr.onreadystatechange = function() {
@@ -146,9 +163,9 @@ function refreshStatus() {
                 
                 // 更新详细状态输出
                 document.getElementById('status-output').textContent = statusText;
-                showOperationResult("状态刷新完成");
-            } else {
-                showOperationResult("状态刷新失败: " + xhr.status);
+                
+                // 刷新接口列表
+                loadConfiguredInterfaces();
             }
         }
     };
@@ -174,7 +191,7 @@ function toggleService() {
     var enableCheckbox = document.getElementById('enable-service');
     var action = enableCheckbox.checked ? 'start' : 'stop';
     
-    showOperationResult(enableCheckbox.checked ? "正在启动服务..." : "正在停止服务...");
+    showOperationResult((enableCheckbox.checked ? "正在启动服务..." : "正在停止服务..."));
     
     var xhr = new XMLHttpRequest();
     xhr.open('GET', '<%=luci.dispatcher.build_url("admin/services/network_switcher/service_control")%>?action=' + action, true);
@@ -302,7 +319,7 @@ function showOperationResult(message) {
     resultElement.scrollTop = resultElement.scrollHeight;
 }
 
-// 每30秒自动刷新状态
+// 每30秒自动刷新状态（不覆盖操作结果）
 setInterval(refreshStatus, 30000);
 </script>
 
