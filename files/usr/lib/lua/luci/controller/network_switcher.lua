@@ -28,7 +28,7 @@ function action_status()
     local response = {}
     
     -- 获取服务状态
-    local service_status = sys.exec("/usr/bin/network_switcher status 2>/dev/null | head -1")
+    local service_status = sys.exec("/usr/bin/network_switcher status 2>/dev/null")
     if service_status:match("运行中") then
         response.service = "running"
     else
@@ -51,7 +51,13 @@ function action_switch()
     local response = {}
     
     if interface then
-        local command = interface == "auto" and "auto" or "switch " .. interface
+        local command
+        if interface == "auto" then
+            command = "auto"
+        else
+            command = "switch " .. interface
+        end
+        
         local result = sys.exec("/usr/bin/network_switcher " .. command .. " 2>&1")
         response.success = true
         response.message = result
@@ -84,7 +90,7 @@ function action_get_log()
     
     local log_content = "日志文件为空"
     if nixio.fs.access("/var/log/network_switcher.log") then
-        log_content = sys.exec("tail -n 50 /var/log/network_switcher.log 2>/dev/null")
+        log_content = sys.exec("cat /var/log/network_switcher.log 2>/dev/null")
     end
     
     lucihttp.prepare_content("text/plain")
@@ -133,15 +139,9 @@ function action_get_configured_interfaces()
     local interface_list = {}
     
     for line in interfaces:gmatch("[^\r\n]+") do
-        if line:match("%S") then  -- 非空行
+        if line:match("%S") then
             table.insert(interface_list, line)
         end
-    end
-    
-    -- 如果没有接口，提供默认值
-    if #interface_list == 0 then
-        table.insert(interface_list, "wan")
-        table.insert(interface_list, "wwan")
     end
     
     lucihttp.prepare_content("application/json")
