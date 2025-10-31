@@ -1,33 +1,33 @@
 <%+header%>
 
 <div class="cbi-map">
-    <h2 name="content"><%:Network Switcher Overview%></h2>
+    <h2 name="content">网络切换器概览</h2>
     
     <div class="cbi-map-descr">
-        <%:Real-time status and control of network interface switching.%>
+        网络接口切换的实时状态和控制。
     </div>
     
     <fieldset class="cbi-section">
-        <legend><%:Service Control%></legend>
+        <legend>服务控制</legend>
         <div id="service-control">
             <div class="cbi-value">
-                <label class="cbi-value-title"><%:Service Status%></label>
+                <label class="cbi-value-title">服务状态</label>
                 <div class="cbi-value-field">
                     <span id="service-status">-</span>
                     <button class="cbi-button cbi-button-apply" onclick="serviceControl('start')" id="start-btn" style="margin-left: 10px;">
-                        <%:Start%>
+                        启动
                     </button>
                     <button class="cbi-button cbi-button-reset" onclick="serviceControl('stop')" id="stop-btn" style="margin-left: 5px;">
-                        <%:Stop%>
+                        停止
                     </button>
                     <button class="cbi-button cbi-button-reload" onclick="serviceControl('restart')" id="restart-btn" style="margin-left: 5px;">
-                        <%:Restart%>
+                        重启
                     </button>
                 </div>
             </div>
             
             <div class="cbi-value">
-                <label class="cbi-value-title"><%:Current Interface%></label>
+                <label class="cbi-value-title">当前接口</label>
                 <div class="cbi-value-field">
                     <span id="current-interface">-</span>
                 </div>
@@ -36,23 +36,23 @@
     </fieldset>
     
     <fieldset class="cbi-section">
-        <legend><%:Quick Actions%></legend>
+        <legend>快速操作</legend>
         <div class="cbi-value">
             <div class="cbi-value-field">
                 <button class="cbi-button cbi-button-reload" onclick="refreshStatus()">
-                    <%:Refresh Status%>
+                    刷新状态
                 </button>
                 <button class="cbi-button cbi-button-positive" onclick="runTest()">
-                    <%:Test Connectivity%>
+                    测试连通性
                 </button>
                 <button class="cbi-button cbi-button-action" onclick="switchInterface('auto')">
-                    <%:Auto Switch%>
+                    自动切换
                 </button>
             </div>
         </div>
         
         <div class="cbi-value">
-            <label class="cbi-value-title"><%:Manual Switch%></label>
+            <label class="cbi-value-title">手动切换</label>
             <div class="cbi-value-field" id="interface-buttons">
                 <!-- 接口按钮将通过JavaScript动态生成 -->
             </div>
@@ -60,12 +60,12 @@
     </fieldset>
     
     <fieldset class="cbi-section">
-        <legend><%:Operation Result%></legend>
+        <legend>操作结果</legend>
         <pre id="operation-result" style="min-height: 120px; background: #f5f5f5; padding: 10px; border-radius: 3px; font-family: monospace; white-space: pre-wrap; font-size: 12px;"></pre>
     </fieldset>
     
     <fieldset class="cbi-section">
-        <legend><%:Detailed Status%></legend>
+        <legend>详细状态</legend>
         <pre id="status-output" style="min-height: 300px; background: #f5f5f5; padding: 10px; border-radius: 3px; font-family: monospace; white-space: pre-wrap; font-size: 12px;"></pre>
     </fieldset>
 </div>
