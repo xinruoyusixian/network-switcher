@@ -53,17 +53,20 @@ switch_wait_time.datatype = "range(1,10)"
 switch_wait_time.default = "3"
 switch_wait_time.placeholder = "3"
 
--- 获取可用接口
-local interface_list = { "wan" }
-
--- 从网络配置获取更多接口（排除loopback）
+-- 获取可用接口 - 从网络配置动态获取
+local interface_list = {}
 uci:foreach("network", "interface",
     function(section)
-        if section[".name"] ~= "loopback" and section[".name"] ~= "wan" then
+        if section[".name"] ~= "loopback" then
             table.insert(interface_list, section[".name"])
         end
     end
 )
+
+-- 如果没有任何接口，至少包含wan
+if #interface_list == 0 then
+    table.insert(interface_list, "wan")
+end
 
 -- 接口配置部分
 interfaces_s = m:section(TypedSection, "interface", "接口配置",
@@ -133,7 +136,7 @@ for _, target in ipairs(target_list) do
     schedule_targets:value(target, target)
 end
 
--- 设置默认接口配置
+-- 初始化默认接口配置
 function m.on_after_commit(self)
     -- 检查是否已经有接口配置
     local has_interfaces = false
