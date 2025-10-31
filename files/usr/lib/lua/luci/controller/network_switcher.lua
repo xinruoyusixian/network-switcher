@@ -18,9 +18,7 @@ function index()
     entry({"admin", "services", "network_switcher", "get_log"}, call("action_get_log"))
     entry({"admin", "services", "network_switcher", "service_control"}, call("action_service_control"))
     entry({"admin", "services", "network_switcher", "clear_log"}, call("action_clear_log"))
-    entry({"admin", "services", "network_switcher", "get_interfaces"}, call("action_get_interfaces"))
     entry({"admin", "services", "network_switcher", "get_configured_interfaces"}, call("action_get_configured_interfaces"))
-    entry({"admin", "services", "network_switcher", "get_current_interface"}, call("action_get_current_interface"))
 end
 
 function action_status()
@@ -30,14 +28,14 @@ function action_status()
     local response = {}
     
     -- 获取服务状态
-    local service_output = sys.exec("/usr/bin/network_switcher status 2>/dev/null | head -1")
-    if service_output:match("运行中") then
+    local service_status = sys.exec("/usr/bin/network_switcher status 2>/dev/null | head -1")
+    if service_status:match("运行中") then
         response.service = "running"
     else
         response.service = "stopped"
     end
     
-    -- 执行状态检查
+    -- 获取完整状态
     local status_output = sys.exec("/usr/bin/network_switcher status 2>/dev/null")
     response.status_output = status_output
     
@@ -53,12 +51,8 @@ function action_switch()
     local response = {}
     
     if interface then
-        -- 实时执行并获取输出
         local command = interface == "auto" and "auto" or "switch " .. interface
-        local handle = io.popen("/usr/bin/network_switcher " .. command .. " 2>&1")
-        local result = handle:read("*a")
-        handle:close()
-        
+        local result = sys.exec("/usr/bin/network_switcher " .. command .. " 2>&1")
         response.success = true
         response.message = result
     else
@@ -74,11 +68,7 @@ function action_test()
     local lucihttp = require("luci.http")
     local sys = require("luci.sys")
     
-    -- 实时执行测试
-    local handle = io.popen("/usr/bin/network_switcher test 2>&1")
-    local result = handle:read("*a")
-    handle:close()
-    
+    local result = sys.exec("/usr/bin/network_switcher test 2>&1")
     local response = {
         success = true,
         output = result
@@ -91,15 +81,10 @@ end
 function action_get_log()
     local lucihttp = require("luci.http")
     local sys = require("luci.sys")
-    local nixio = require("nixio")
     
-    local log_content = ""
-    local log_file = "/var/log/network_switcher.log"
-    
-    if nixio.fs.access(log_file) then
-        log_content = sys.exec("tail -n 100 " .. log_file)
-    else
-        log_content = "日志文件不存在或为空"
+    local log_content = "日志文件为空"
+    if nixio.fs.access("/var/log/network_switcher.log") then
+        log_content = sys.exec("tail -n 50 /var/log/network_switcher.log 2>/dev/null")
     end
     
     lucihttp.prepare_content("text/plain")
@@ -140,23 +125,6 @@ function action_clear_log()
     lucihttp.write_json(response)
 end
 
-function action_get_interfaces()
-    local lucihttp = require("luci.http")
-    local sys = require("luci.sys")
-    
-    local interfaces = sys.exec("/usr/bin/network_switcher interfaces 2>/dev/null")
-    local interface_list = {}
-    
-    for line in interfaces:gmatch("[^\r\n]+") do
-        if line ~= "" then
-            table.insert(interface_list, line)
-        end
-    end
-    
-    lucihttp.prepare_content("application/json")
-    lucihttp.write_json(interface_list)
-end
-
 function action_get_configured_interfaces()
     local lucihttp = require("luci.http")
     local sys = require("luci.sys")
@@ -165,21 +133,17 @@ function action_get_configured_interfaces()
     local interface_list = {}
     
     for line in interfaces:gmatch("[^\r\n]+") do
-        if line ~= "" then
+        if line:match("%S") then  -- 非空行
             table.insert(interface_list, line)
         end
     end
     
+    -- 如果没有接口，提供默认值
+    if #interface_list == 0 then
+        table.insert(interface_list, "wan")
+        table.insert(interface_list, "wwan")
+    end
+    
     lucihttp.prepare_content("application/json")
     lucihttp.write_json(interface_list)
-end
-
-function action_get_current_interface()
-    local lucihttp = require("luci.http")
-    local sys = require("luci.sys")
-    
-    local current_interface = sys.exec("/usr/bin/network_switcher current_interface 2>/dev/null")
-    
-    lucihttp.prepare_content("text/plain")
-    lucihttp.write(current_interface)
 end
