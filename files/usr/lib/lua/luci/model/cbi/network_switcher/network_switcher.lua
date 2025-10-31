@@ -9,40 +9,31 @@ s = m:section(TypedSection, "settings", "全局设置")
 s.anonymous = true
 s.addremove = false
 
-operation_mode = s:option(ListValue, "operation_mode", "运行模式", 
-    "选择运行模式")
-operation_mode:value("auto", "自动模式 (故障切换)")
-operation_mode:value("manual", "手动模式")
-operation_mode.default = "auto"
-
+-- 删除运行模式选项，只保留检查间隔
 check_interval = s:option(Value, "check_interval", "检查间隔(秒)", 
-    "网络检查的时间间隔(仅自动模式)")
+    "网络检查的时间间隔")
 check_interval.datatype = "uinteger"
 check_interval.default = "60"
 check_interval.placeholder = "60"
-check_interval:depends("operation_mode", "auto")
 
 -- 网络测试设置
 s:option(DummyValue, "test_settings", "网络测试设置")
 
-ping_target1 = s:option(Value, "ping_target1", "Ping目标 1", "第一个测试目标IP")
-ping_target1.default = "8.8.8.8"
-ping_target1.placeholder = "8.8.8.8"
+-- 使用DynamicList作为Ping目标
+ping_targets = s:option(DynamicList, "ping_targets", "Ping目标", 
+    "用于测试连通性的IP地址(每行一个，可点击+号添加)")
+ping_targets.default = "8.8.8.8 1.1.1.1 223.5.5.5"
+ping_targets.placeholder = "8.8.8.8"
 
-ping_target2 = s:option(Value, "ping_target2", "Ping目标 2", "第二个测试目标IP")
-ping_target2.default = "1.1.1.1"
-ping_target2.placeholder = "1.1.1.1"
-
-ping_target3 = s:option(Value, "ping_target3", "Ping目标 3", "第三个测试目标IP")
-ping_target3.default = "223.5.5.5"
-ping_target3.placeholder = "223.5.5.5"
-
-ping_target4 = s:option(Value, "ping_target4", "Ping目标 4", "第四个测试目标IP")
-ping_target4.default = "114.114.114.114"
-ping_target4.placeholder = "114.114.114.114"
+-- 添加Ping成功次数选项
+ping_success_count = s:option(Value, "ping_success_count", "Ping成功次数", 
+    "需要成功Ping通的目标数量才认为网络正常(默认1)")
+ping_success_count.datatype = "uinteger"
+ping_success_count.default = "1"
+ping_success_count.placeholder = "1"
 
 ping_count = s:option(Value, "ping_count", "Ping次数", 
-    "每次测试发送的ping包数量(1-10)")
+    "对每个目标发送的ping包数量(1-10)")
 ping_count.datatype = "range(1,10)"
 ping_count.default = "3"
 ping_count.placeholder = "3"
@@ -59,13 +50,13 @@ switch_wait_time.datatype = "range(1,10)"
 switch_wait_time.default = "3"
 switch_wait_time.placeholder = "3"
 
--- 获取可用接口
-local interface_list = { "wan", "wwan" }
+-- 获取可用接口 - 只包含wan，不自动添加wwan
+local interface_list = { "wan" }
 
--- 从网络配置获取更多接口
+-- 从网络配置获取更多接口（排除loopback和wan）
 uci:foreach("network", "interface",
     function(section)
-        if section[".name"] ~= "loopback" and section[".name"] ~= "wan" and section[".name"] ~= "wwan" then
+        if section[".name"] ~= "loopback" and section[".name"] ~= "wan" then
             table.insert(interface_list, section[".name"])
         end
     end
@@ -118,23 +109,6 @@ schedule_targets.default = "auto"
 schedule_targets.placeholder = "auto"
 for _, target in ipairs(target_list) do
     schedule_targets:value(target, target)
-end
-
--- 保存前处理函数，将单个ping目标合并为列表
-function m.on_commit(self)
-    local ping_targets = {}
-    local target1 = ping_target1:formvalue("settings") or "8.8.8.8"
-    local target2 = ping_target2:formvalue("settings") or "1.1.1.1"
-    local target3 = ping_target3:formvalue("settings") or "223.5.5.5"
-    local target4 = ping_target4:formvalue("settings") or "114.114.114.114"
-    
-    if target1 and target1 ~= "" then table.insert(ping_targets, target1) end
-    if target2 and target2 ~= "" then table.insert(ping_targets, target2) end
-    if target3 and target3 ~= "" then table.insert(ping_targets, target3) end
-    if target4 and target4 ~= "" then table.insert(ping_targets, target4) end
-    
-    uci:set("network_switcher", "settings", "ping_targets", table.concat(ping_targets, " "))
-    uci:commit("network_switcher")
 end
 
 return m
