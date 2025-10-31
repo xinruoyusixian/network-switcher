@@ -1,0 +1,119 @@
+<%+header%>
+
+<div class="cbi-map">
+    <h2 name="content"><%:Network Switcher Overview%></h2>
+    
+    <div class="cbi-map-descr">
+        <%:Real-time status and control of network interface switching.%>
+    </div>
+    
+    <fieldset class="cbi-section">
+        <legend><%:Service Status%></legend>
+        <div id="status-container">
+            <div class="cbi-value">
+                <label class="cbi-value-title"><%:Service Status%></label>
+                <div class="cbi-value-field">
+                    <span id="service-status">-</span>
+                </div>
+            </div>
+            
+            <div class="cbi-value">
+                <label class="cbi-value-title"><%:Operation%></label>
+                <div class="cbi-value-field">
+                    <button class="cbi-button cbi-button-reload" onclick="refreshStatus()">
+                        <%:Refresh Status%>
+                    </button>
+                    <button class="cbi-button cbi-button-positive" onclick="runTest()">
+                        <%:Test Connectivity%>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </fieldset>
+    
+    <fieldset class="cbi-section">
+        <legend><%:Quick Actions%></legend>
+        <div class="cbi-value">
+            <div class="cbi-value-field">
+                <button class="cbi-button cbi-button-action" onclick="switchInterface('wan')">
+                    <%:Switch to WAN%>
+                </button>
+                <button class="cbi-button cbi-button-action" onclick="switchInterface('wwan')">
+                    <%:Switch to WWAN%>
+                </button>
+            </div>
+        </div>
+    </fieldset>
+    
+    <fieldset class="cbi-section">
+        <legend><%:Detailed Status%></legend>
+        <pre id="status-output" style="min-height: 300px; background: #f5f5f5; padding: 10px; border-radius: 3px; font-family: monospace; white-space: pre-wrap;"></pre>
+    </fieldset>
+</div>
+
+<script>
+// 页面加载时获取状态
+window.onload = function() {
+    refreshStatus();
+};
+
+function refreshStatus() {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '<%=luci.dispatcher.build_url("admin/services/network_switcher/status")%>', true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4 && xhr.status === 200) {
+            var response = JSON.parse(xhr.responseText);
+            
+            // 更新服务状态
+            var statusElement = document.getElementById('service-status');
+            if (response.service === 'running') {
+                statusElement.innerHTML = '<span style="color: green">● <%:Running%></span>';
+            } else {
+                statusElement.innerHTML = '<span style="color: red">● <%:Stopped%></span>';
+            }
+            
+            // 更新详细状态输出
+            document.getElementById('status-output').textContent = response.status_output;
+        }
+    };
+    xhr.send();
+}
+
+function runTest() {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '<%=luci.dispatcher.build_url("admin/services/network_switcher/test")%>', true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4 && xhr.status === 200) {
+            var response = JSON.parse(xhr.responseText);
+            alert(response.output);
+        }
+    };
+    xhr.send();
+}
+
+function switchInterface(interface) {
+    if (!confirm('<%:Are you sure you want to switch to%> ' + interface.toUpperCase() + '?')) {
+        return;
+    }
+    
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '<%=luci.dispatcher.build_url("admin/services/network_switcher/switch")%>?interface=' + interface, true);
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState === 4 && xhr.status === 200) {
+            var response = JSON.parse(xhr.responseText);
+            if (response.success) {
+                alert('<%:Switch completed:%>\n' + response.message);
+                refreshStatus();
+            } else {
+                alert('<%:Switch failed:%>\n' + response.message);
+            }
+        }
+    };
+    xhr.send();
+}
+
+// 每30秒自动刷新状态
+setInterval(refreshStatus, 30000);
+</script>
+
+<%+footer%>
