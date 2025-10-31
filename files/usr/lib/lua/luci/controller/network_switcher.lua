@@ -11,7 +11,6 @@ function index()
     entry({"admin", "services", "network_switcher", "switch"}, call("action_switch"))
     entry({"admin", "services", "network_switcher", "test"}, call("action_test"))
     entry({"admin", "services", "network_switcher", "get_log"}, call("action_get_log"))
-    entry({"admin", "services", "network_switcher", "get_interfaces"}, call("action_get_interfaces"))
     entry({"admin", "services", "network_switcher", "service_control"}, call("action_service_control"))
 end
 
@@ -23,20 +22,16 @@ function action_status()
     local response = {}
     
     -- 获取服务状态
-    local service_status = sys.exec("/usr/bin/network_switcher status 2>/dev/null | head -1")
-    response.service = service_status:match("运行中") and "running" or "stopped"
+    local service_output = sys.exec("/usr/bin/network_switcher status 2>/dev/null | head -1")
+    if service_output:match("运行中") then
+        response.service = "running"
+    else
+        response.service = "stopped"
+    end
     
     -- 执行状态检查
     local status_output = sys.exec("/usr/bin/network_switcher status 2>/dev/null")
     response.status_output = status_output
-    
-    -- 获取当前配置
-    response.config = {
-        enabled = uci:get("network_switcher", "settings", "enabled") or "0",
-        operation_mode = uci:get("network_switcher", "settings", "operation_mode") or "auto",
-        check_interval = uci:get("network_switcher", "settings", "check_interval") or "60",
-        schedule_enabled = uci:get("network_switcher", "schedule", "enabled") or "0"
-    }
     
     lucihttp.prepare_content("application/json")
     lucihttp.write_json(response)
@@ -100,23 +95,6 @@ function action_get_log()
     
     lucihttp.prepare_content("text/plain")
     lucihttp.write(log_content)
-end
-
-function action_get_interfaces()
-    local lucihttp = require("luci.http")
-    local sys = require("luci.sys")
-    
-    local interfaces = sys.exec("/usr/bin/network_switcher interfaces 2>/dev/null")
-    local interface_list = {}
-    
-    for line in interfaces:gmatch("[^\r\n]+") do
-        if line ~= "" then
-            table.insert(interface_list, line)
-        end
-    end
-    
-    lucihttp.prepare_content("application/json")
-    lucihttp.write_json(interface_list)
 end
 
 function action_service_control()
