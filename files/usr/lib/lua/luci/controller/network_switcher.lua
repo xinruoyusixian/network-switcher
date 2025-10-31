@@ -11,17 +11,20 @@ function index()
     entry({"admin", "services", "network_switcher", "switch"}, call("action_switch"))
     entry({"admin", "services", "network_switcher", "test"}, call("action_test"))
     entry({"admin", "services", "network_switcher", "get_log"}, call("action_get_log"))
+    entry({"admin", "services", "network_switcher", "get_interfaces"}, call("action_get_interfaces"))
+    entry({"admin", "services", "network_switcher", "service_control"}, call("action_service_control"))
 end
 
 function action_status()
     local lucihttp = require("luci.http")
-    local uci = require("luci.model.uci").cursor()
     local sys = require("luci.sys")
+    local uci = require("luci.model.uci").cursor()
     
     local response = {}
     
     -- 获取服务状态
-    response.service = sys.init.enabled("network_switcher") and "running" or "stopped"
+    local service_status = sys.exec("/usr/bin/network_switcher status 2>/dev/null | head -1")
+    response.service = service_status:match("运行中") and "running" or "stopped"
     
     -- 执行状态检查
     local status_output = sys.exec("/usr/bin/network_switcher status 2>/dev/null")
@@ -30,8 +33,9 @@ function action_status()
     -- 获取当前配置
     response.config = {
         enabled = uci:get("network_switcher", "settings", "enabled") or "0",
-        auto_mode = uci:get("network_switcher", "settings", "auto_mode") or "1",
-        check_interval = uci:get("network_switcher", "settings", "check_interval") or "60"
+        operation_mode = uci:get("network_switcher", "settings", "operation_mode") or "auto",
+        check_interval = uci:get("network_switcher", "settings", "check_interval") or "60",
+        schedule_enabled = uci:get("network_switcher", "schedule", "enabled") or "0"
     }
     
     lucihttp.prepare_content("application/json")
@@ -45,8 +49,12 @@ function action_switch()
     local interface = lucihttp.formvalue("interface")
     local response = {}
     
-    if interface == "wan" or interface == "wwan" then
-        local result = sys.exec("/usr/bin/network_switcher switch " .. interface .. " 2>&1")
+    if interface then
+        -- 实时执行并获取输出
+        local handle = io.popen("/usr/bin/network_switcher switch " .. interface .. " 2>&1")
+        local result = handle:read("*a")
+        handle:close()
+        
         response.success = true
         response.message = result
     else
@@ -62,7 +70,11 @@ function action_test()
     local lucihttp = require("luci.http")
     local sys = require("luci.sys")
     
-    local result = sys.exec("/usr/bin/network_switcher test 2>&1")
+    -- 实时执行测试
+    local handle = io.popen("/usr/bin/network_switcher test 2>&1")
+    local result = handle:read("*a")
+    handle:close()
+    
     local response = {
         success = true,
         output = result
@@ -81,11 +93,48 @@ function action_get_log()
     local log_file = "/var/log/network_switcher.log"
     
     if nixio.fs.access(log_file) then
-        log_content = sys.exec("tail -n 50 " .. log_file)
+        log_content = sys.exec("tail -n 100 " .. log_file)
     else
-        log_content = "Log file not found"
+        log_content = "Log file not found or empty"
     end
     
     lucihttp.prepare_content("text/plain")
     lucihttp.write(log_content)
+end
+
+function action_get_interfaces()
+    local lucihttp = require("luci.http")
+    local sys = require("luci.sys")
+    
+    local interfaces = sys.exec("/usr/bin/network_switcher interfaces 2>/dev/null")
+    local interface_list = {}
+    
+    for line in interfaces:gmatch("[^\r\n]+") do
+        if line ~= "" then
+            table.insert(interface_list, line)
+        end
+    end
+    
+    lucihttp.prepare_content("application/json")
+    lucihttp.write_json(interface_list)
+end
+
+function action_service_control()
+    local lucihttp = require("luci.http")
+    local sys = require("luci.sys")
+    
+    local action = lucihttp.formvalue("action")
+    local response = {}
+    
+    if action == "start" or action == "stop" or action == "restart" then
+        local result = sys.exec("/usr/bin/network_switcher " .. action .. " 2>&1")
+        response.success = true
+        response.message = result
+    else
+        response.success = false
+        response.message = "Invalid action"
+    end
+    
+    lucihttp.prepare_content("application/json")
+    lucihttp.write_json(response)
 end
