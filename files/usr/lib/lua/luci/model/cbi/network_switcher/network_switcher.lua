@@ -1,3 +1,4 @@
+-- 文件: files/usr/lib/lua/luci/model/cbi/network_switcher/network_switcher.lua
 local uci = require("luci.model.uci").cursor()
 local sys = require("luci.sys")
 
@@ -18,7 +19,7 @@ check_interval.placeholder = "60"
 -- 网络测试设置
 s:option(DummyValue, "test_settings", "网络测试设置")
 
--- 使用DynamicList作为Ping目标，设置默认值为三个独立的IP
+-- 使用DynamicList作为Ping目标
 ping_targets = s:option(DynamicList, "ping_targets", "Ping目标", 
     "用于测试连通性的IP地址(每行一个，可点击+号添加)")
 ping_targets.default = {"8.8.8.8", "1.1.1.1", "223.5.5.5"}
@@ -49,10 +50,10 @@ switch_wait_time.datatype = "range(1,10)"
 switch_wait_time.default = "3"
 switch_wait_time.placeholder = "3"
 
--- 获取可用接口 - 只包含wan，不自动添加wwan
+-- 获取可用接口
 local interface_list = { "wan" }
 
--- 从网络配置获取更多接口（排除loopback和wan）
+-- 从网络配置获取更多接口（排除loopback）
 uci:foreach("network", "interface",
     function(section)
         if section[".name"] ~= "loopback" and section[".name"] ~= "wan" then
@@ -127,6 +128,28 @@ schedule_targets.default = "auto"
 schedule_targets.placeholder = "auto"
 for _, target in ipairs(target_list) do
     schedule_targets:value(target, target)
+end
+
+-- 设置默认接口配置
+function m.on_after_commit(self)
+    -- 检查是否已经有接口配置
+    local has_interfaces = false
+    uci:foreach("network_switcher", "interface",
+        function(section)
+            has_interfaces = true
+        end
+    )
+    
+    -- 如果没有接口配置，创建默认的wan接口
+    if not has_interfaces then
+        uci:section("network_switcher", "interface", "wan", {
+            enabled = "1",
+            interface = "wan",
+            metric = "10",
+            primary = "1"
+        })
+        uci:commit("network_switcher")
+    end
 end
 
 return m
