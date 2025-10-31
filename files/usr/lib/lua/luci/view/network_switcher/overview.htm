@@ -1,3 +1,4 @@
+<!-- 文件: files/usr/lib/lua/luci/view/network_switcher/overview.htm -->
 <%+header%>
 
 <div class="cbi-map">
@@ -113,6 +114,9 @@ function loadConfiguredInterfaces() {
         if (xhr.readyState === 4 && xhr.status === 200) {
             var interfaces = JSON.parse(xhr.responseText);
             updateInterfaceSelect(interfaces);
+        } else if (xhr.readyState === 4) {
+            // 如果获取失败，使用默认接口
+            updateInterfaceSelect(['wan']);
         }
     };
     xhr.send();
