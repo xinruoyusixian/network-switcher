@@ -5,8 +5,8 @@ m = Map("network_switcher", translate("Network Switcher Configuration"),
 local service_s = m:section(TypedSection, "_service", translate("Service Control"))
 service_s.anonymous = true
 
-local service_btn = service_s:option(Button, "_control", translate("Service Status"))
-service_btn.template = "network_switcher/service_control"
+local service_status = service_s:option(DummyValue, "_status", translate("Service Status"))
+service_status.template = "network_switcher/service_status"
 
 -- 全局设置
 s = m:section(TypedSection, "settings", translate("Global Settings"))
@@ -31,11 +31,12 @@ check_interval.placeholder = "60"
 check_interval:depends("operation_mode", "auto")
 
 -- 网络测试设置
-s:option(DummyValue", "test_settings", translate("Network Test Settings")).default = ""
+local test_title = s:option(DummyValue, "test_settings", translate("Network Test Settings"))
+test_title.default = ""
 
 ping_targets = s:option(DynamicList, "ping_targets", translate("Ping Targets"), 
     translate("IP addresses to test connectivity (one per line)"))
-ping_targets.default = { "8.8.8.8", "1.1.1.1", "223.5.5.5", "114.114.114.114" }
+ping_targets.default = "8.8.8.8 1.1.1.1 223.5.5.5 114.114.114.114"
 ping_targets.placeholder = "8.8.8.8"
 
 ping_count = s:option(Value, "ping_count", translate("Ping Count"), 
@@ -75,15 +76,6 @@ interfaces_s = m:section(TypedSection, "interface", translate("Interface Configu
 interfaces_s.anonymous = true
 interfaces_s.addremove = true
 interfaces_s.template = "cbi/tblsection"
-interfaces_s.extedit = luci.dispatcher.build_url("admin/services/network_switcher/interface/%s")
-
-function interfaces_s.create(self, section)
-    local created = TypedSection.create(self, section)
-    self.map:set(created, "enabled", "1")
-    self.map:set(created, "metric", "10")
-    self.map.uci:save("network_switcher")
-    luci.http.redirect(self.extedit:format(created))
-end
 
 enabled = interfaces_s:option(Flag, "enabled", translate("Enable"))
 enabled.default = "1"
@@ -110,12 +102,12 @@ schedule_enabled.default = "0"
 
 schedule_times = schedule_s:option(DynamicList, "times", translate("Schedule Times"), 
     translate("Switch times in HH:MM format (one per line)"))
-schedule_times.default = { "08:00", "18:00" }
+schedule_times.default = "08:00 18:00"
 schedule_times.placeholder = "08:00"
 
 schedule_targets = schedule_s:option(DynamicList, "targets", translate("Switch Targets"), 
     translate("Target interface for each time, use 'auto' for auto mode"))
-schedule_targets.default = { "auto", "wwan" }
+schedule_targets.default = "auto wwan"
 schedule_targets.placeholder = "auto"
 
 -- 快速操作部分
