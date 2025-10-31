@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # ==============================================
-# 网络切换脚本 - OpenWrt插件版 v1.0.1
+# 网络切换脚本 - OpenWrt插件版 v1.0.2
 # ==============================================
 
 # 环境设置
@@ -116,8 +116,8 @@ service_control() {
             mkdir -p /var/lock /var/log /var/state /var/run
             
             log "启动网络切换服务" "SERVICE"
-            # 使用nohup在后台运行守护进程
-            nohup /usr/bin/network_switcher daemon >/dev/null 2>&1 &
+            # 直接运行守护进程
+            /usr/bin/network_switcher daemon >/dev/null 2>&1 &
             local pid=$!
             echo $pid > "$PID_FILE"
             sleep 2
@@ -597,7 +597,7 @@ main() {
             clear_log
             ;;
         *)
-            echo "网络切换器 - OpenWrt插件版 v1.0.1"
+            echo "网络切换器 - OpenWrt插件版 v1.0.2"
             echo ""
             echo "用法: $0 [命令]"
             echo ""
