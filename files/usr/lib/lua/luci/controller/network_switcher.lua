@@ -1,10 +1,10 @@
 module("luci.controller.network_switcher", package.seeall)
 
 function index()
-    entry({"admin", "services", "network_switcher"}, firstchild(), _("Network Switcher"), 60).dependent = false
-    entry({"admin", "services", "network_switcher", "overview"}, template("network_switcher/overview"), _("Overview"), 1)
-    entry({"admin", "services", "network_switcher", "settings"}, cbi("network_switcher/network_switcher"), _("Settings"), 2)
-    entry({"admin", "services", "network_switcher", "log"}, template("network_switcher/log"), _("Log"), 3)
+    entry({"admin", "services", "network_switcher"}, firstchild(), "网络切换器", 60).dependent = false
+    entry({"admin", "services", "network_switcher", "overview"}, template("network_switcher/overview"), "概览", 1)
+    entry({"admin", "services", "network_switcher", "settings"}, cbi("network_switcher/network_switcher"), "设置", 2)
+    entry({"admin", "services", "network_switcher", "log"}, template("network_switcher/log"), "日志", 3)
     
     -- AJAX 接口
     entry({"admin", "services", "network_switcher", "status"}, call("action_status"))
@@ -12,6 +12,8 @@ function index()
     entry({"admin", "services", "network_switcher", "test"}, call("action_test"))
     entry({"admin", "services", "network_switcher", "get_log"}, call("action_get_log"))
     entry({"admin", "services", "network_switcher", "service_control"}, call("action_service_control"))
+    entry({"admin", "services", "network_switcher", "clear_log"}, call("action_clear_log"))
+    entry({"admin", "services", "network_switcher", "get_interfaces"}, call("action_get_interfaces"))
 end
 
 function action_status()
@@ -54,7 +56,7 @@ function action_switch()
         response.message = result
     else
         response.success = false
-        response.message = "Invalid interface"
+        response.message = "无效的接口"
     end
     
     lucihttp.prepare_content("application/json")
@@ -90,7 +92,7 @@ function action_get_log()
     if nixio.fs.access(log_file) then
         log_content = sys.exec("tail -n 100 " .. log_file)
     else
-        log_content = "Log file not found or empty"
+        log_content = "日志文件不存在或为空"
     end
     
     lucihttp.prepare_content("text/plain")
@@ -110,9 +112,40 @@ function action_service_control()
         response.message = result
     else
         response.success = false
-        response.message = "Invalid action"
+        response.message = "无效的操作"
     end
     
     lucihttp.prepare_content("application/json")
     lucihttp.write_json(response)
+end
+
+function action_clear_log()
+    local lucihttp = require("luci.http")
+    local sys = require("luci.sys")
+    
+    local result = sys.exec("/usr/bin/network_switcher clear_log 2>&1")
+    local response = {
+        success = true,
+        message = result
+    }
+    
+    lucihttp.prepare_content("application/json")
+    lucihttp.write_json(response)
+end
+
+function action_get_interfaces()
+    local lucihttp = require("luci.http")
+    local sys = require("luci.sys")
+    
+    local interfaces = sys.exec("/usr/bin/network_switcher interfaces 2>/dev/null")
+    local interface_list = {}
+    
+    for line in interfaces:gmatch("[^\r\n]+") do
+        if line ~= "" then
+            table.insert(interface_list, line)
+        end
+    end
+    
+    lucihttp.prepare_content("application/json")
+    lucihttp.write_json(interface_list)
 end
