@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # ==============================================
-# 网络切换脚本 - OpenWrt插件版（增强版）
+# 网络切换脚本 - OpenWrt插件版（修正版）
 # ==============================================
 
 # 环境设置
@@ -40,15 +40,9 @@ read_uci_config() {
         fi
     done
     
-    # 设置主要接口（第一个启用的接口作为主接口）
+    # 设置主要接口
     WAN_INTERFACE=$(echo $INTERFACES | awk '{print $1}')
     WWAN_INTERFACE=$(echo $INTERFACES | awk '{print $2}')
-    
-    # 读取接口metric
-    WAN_METRIC=$(uci get network_switcher.@interface[0].metric 2>/dev/null || echo "10")
-    if [ -n "$WWAN_INTERFACE" ]; then
-        WWAN_METRIC=$(uci get network_switcher.@interface[1].metric 2>/dev/null || echo "20")
-    fi
     
     # 读取定时任务
     SCHEDULE_ENABLED=$(uci get network_switcher.schedule.enabled 2>/dev/null || echo "0")
@@ -64,7 +58,7 @@ SCRIPT_NAME="network-switcher"
 LOCK_FILE="/var/lock/network_switcher.lock"
 LOG_FILE="/var/log/network_switcher.log"
 STATE_FILE="/var/state/network_switcher.state"
-SCHEDULE_STATE_FILE="/var/state/network_switcher_schedule.state"
+PID_FILE="/var/run/network_switcher.pid"
 
 # ==============================================
 # 函数定义
@@ -103,8 +97,8 @@ service_control() {
     local action="$1"
     case "$action" in
         "start")
-            if [ -f "/var/run/network_switcher.pid" ]; then
-                local pid=$(cat "/var/run/network_switcher.pid")
+            if [ -f "$PID_FILE" ]; then
+                local pid=$(cat "$PID_FILE")
                 if [ -d "/proc/$pid" ]; then
                     echo "服务已在运行 (PID: $pid)"
                     return 0
@@ -112,13 +106,21 @@ service_control() {
             fi
             
             log "启动网络切换服务" "SERVICE"
-            /usr/bin/network_switcher daemon &
-            echo $! > "/var/run/network_switcher.pid"
-            echo "服务启动成功"
+            /usr/bin/network_switcher daemon >/dev/null 2>&1 &
+            local pid=$!
+            echo $pid > "$PID_FILE"
+            sleep 1
+            if [ -d "/proc/$pid" ]; then
+                echo "服务启动成功 (PID: $pid)"
+                return 0
+            else
+                echo "服务启动失败"
+                return 1
+            fi
             ;;
         "stop")
-            if [ -f "/var/run/network_switcher.pid" ]; then
-                local pid=$(cat "/var/run/network_switcher.pid")
+            if [ -f "$PID_FILE" ]; then
+                local pid=$(cat "$PID_FILE")
                 if [ -d "/proc/$pid" ]; then
                     kill $pid
                     log "停止网络切换服务" "SERVICE"
@@ -126,7 +128,7 @@ service_control() {
                 else
                     echo "服务未运行"
                 fi
-                rm -f "/var/run/network_switcher.pid"
+                rm -f "$PID_FILE"
             else
                 echo "服务未运行"
             fi
@@ -137,17 +139,17 @@ service_control() {
             service_control start
             ;;
         "status")
-            if [ -f "/var/run/network_switcher.pid" ]; then
-                local pid=$(cat "/var/run/network_switcher.pid")
+            if [ -f "$PID_FILE" ]; then
+                local pid=$(cat "$PID_FILE")
                 if [ -d "/proc/$pid" ]; then
-                    echo "服务运行中 (PID: $pid)"
+                    echo "运行中 (PID: $pid)"
                     return 0
                 else
-                    echo "服务进程不存在"
+                    echo "已停止"
                     return 1
                 fi
             else
-                echo "服务未运行"
+                echo "已停止"
                 return 1
             fi
             ;;
@@ -176,15 +178,6 @@ get_interface_gateway() {
 
 get_current_default_interface() {
     ip route show default 2>/dev/null | head -1 | awk '{print $5}'
-}
-
-get_interface_info() {
-    local interface="$1"
-    local device=$(get_interface_device "$interface")
-    local ip=$(ubus call network.interface.$interface status 2>/dev/null | jsonfilter -e '@.ipv4-address[0].address' 2>/dev/null)
-    local gateway=$(get_interface_gateway "$interface")
-    
-    echo "设备: $device, IP: $ip, 网关: $gateway"
 }
 
 # 接口可用性检查
@@ -274,14 +267,19 @@ perform_route_switch() {
     
     # 获取该接口的metric
     local metric="10"
-    uci show network_switcher 2>/dev/null | grep "=interface" | while read line; do
-        local section=$(echo $line | cut -d'.' -f2 | cut -d'=' -f1)
+    uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read section; do
         local iface=$(uci get network_switcher.$section.interface 2>/dev/null)
         if [ "$iface" = "$target_interface" ]; then
             metric=$(uci get network_switcher.$section.metric 2>/dev/null || echo "10")
+            echo "$metric" > /tmp/current_metric
             break
         fi
     done
+    
+    if [ -f "/tmp/current_metric" ]; then
+        metric=$(cat "/tmp/current_metric")
+        rm -f "/tmp/current_metric"
+    fi
     
     ip route replace default via "$gateway" dev "$device" metric "$metric"
     
@@ -358,9 +356,8 @@ auto_switch() {
     fi
     
     # 获取所有启用的接口并按metric排序
-    local interfaces=""
-    uci show network_switcher 2>/dev/null | grep "=interface" | while read line; do
-        local section=$(echo $line | cut -d'.' -f2 | cut -d'=' -f1)
+    local sorted_interfaces=""
+    uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read section; do
         local enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
         local interface=$(uci get network_switcher.$section.interface 2>/dev/null)
         local metric=$(uci get network_switcher.$section.metric 2>/dev/null || echo "999")
@@ -368,14 +365,15 @@ auto_switch() {
         if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
             echo "$metric:$interface"
         fi
-    done | sort -n | cut -d: -f2 | while read iface; do
-        if [ -n "$iface" ]; then
-            interfaces="$interfaces $iface"
-        fi
-    done
+    done | sort -n | cut -d: -f2 > /tmp/sorted_interfaces
+    
+    if [ -f "/tmp/sorted_interfaces" ]; then
+        sorted_interfaces=$(cat /tmp/sorted_interfaces)
+        rm -f /tmp/sorted_interfaces
+    fi
     
     # 尝试按优先级顺序切换
-    for interface in $interfaces; do
+    for interface in $sorted_interfaces; do
         if is_interface_ready_for_switch "$interface"; then
             local current_device=$(get_current_default_interface)
             local target_device=$(get_interface_device "$interface")
@@ -397,52 +395,16 @@ auto_switch() {
     return 1
 }
 
-# 定时切换检查
-check_schedule() {
-    if [ "$SCHEDULE_ENABLED" != "1" ] || [ -z "$SCHEDULE_TIMES" ] || [ -z "$SCHEDULE_TARGETS" ]; then
-        return 0
-    fi
-    
-    local current_time=$(date +%H:%M)
-    local current_date=$(date +%Y%m%d)
-    local last_run_date=$(cat "$SCHEDULE_STATE_FILE" 2>/dev/null || echo "0")
-    
-    # 将时间字符串转换为数组
-    local times_array=$(echo $SCHEDULE_TIMES | tr ',' ' ')
-    local targets_array=$(echo $SCHEDULE_TARGETS | tr ',' ' ')
-    
-    local i=1
-    for time in $times_array; do
-        local target=$(echo $targets_array | awk "{print \$$i}")
-        
-        if [ "$current_time" = "$time" ] && [ "$current_date" != "$last_run_date" ]; then
-            log "执行定时切换: $time -> $target" "SCHEDULE"
-            
-            case "$target" in
-                "auto")
-                    auto_switch
-                    ;;
-                *)
-                    switch_interface "$target"
-                    ;;
-            esac
-            
-            # 记录执行日期
-            echo "$current_date" > "$SCHEDULE_STATE_FILE"
-            break
-        fi
-        i=$((i + 1))
-    done
-}
-
 # 显示状态
 show_status() {
     read_uci_config
     
     echo "=== 网络切换器状态 ==="
-    echo "服务状态: $(service_control status | head -1)"
+    echo "服务状态: $(service_control status)"
     echo "运行模式: $OPERATION_MODE"
-    echo "检查间隔: ${CHECK_INTERVAL}秒"
+    if [ "$OPERATION_MODE" = "auto" ]; then
+        echo "检查间隔: ${CHECK_INTERVAL}秒"
+    fi
     echo "定时任务: $([ "$SCHEDULE_ENABLED" = "1" ] && echo "已启用" || echo "已禁用")"
     echo ""
     
@@ -452,8 +414,7 @@ show_status() {
     
     # 显示所有启用的接口状态
     echo -e "\n=== 接口状态 ==="
-    uci show network_switcher 2>/dev/null | grep "=interface" | while read line; do
-        local section=$(echo $line | cut -d'.' -f2 | cut -d'=' -f1)
+    uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read section; do
         local enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
         local interface=$(uci get network_switcher.$section.interface 2>/dev/null)
         local metric=$(uci get network_switcher.$section.metric 2>/dev/null || echo "999")
@@ -474,20 +435,6 @@ show_status() {
         fi
     done
     
-    # 显示定时任务
-    if [ "$SCHEDULE_ENABLED" = "1" ]; then
-        echo -e "\n=== 定时任务 ==="
-        local times_array=$(echo $SCHEDULE_TIMES | tr ',' ' ')
-        local targets_array=$(echo $SCHEDULE_TARGETS | tr ',' ' ')
-        
-        local i=1
-        for time in $times_array; do
-            local target=$(echo $targets_array | awk "{print \$$i}")
-            echo "时间: $time -> 目标: $target"
-            i=$((i + 1))
-        done
-    fi
-    
     # 显示状态文件
     if [ -f "$STATE_FILE" ]; then
         echo -e "\n保存的状态: $(cat "$STATE_FILE")"
@@ -502,8 +449,7 @@ test_connectivity() {
     echo "测试目标: $PING_TARGETS"
     echo ""
     
-    uci show network_switcher 2>/dev/null | grep "=interface" | while read line; do
-        local section=$(echo $line | cut -d'.' -f2 | cut -d'=' -f1)
+    uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read section; do
         local enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
         local interface=$(uci get network_switcher.$section.interface 2>/dev/null)
         
@@ -546,9 +492,6 @@ run_daemon() {
         read_uci_config
         
         if [ "$ENABLED" = "1" ]; then
-            # 检查定时任务
-            check_schedule
-            
             # 自动模式检查
             if [ "$OPERATION_MODE" = "auto" ]; then
                 auto_switch
@@ -596,8 +539,7 @@ main() {
             else
                 echo "用法: $0 switch [接口名]"
                 echo "可用接口:"
-                uci show network_switcher 2>/dev/null | grep "=interface" | while read line; do
-                    local section=$(echo $line | cut -d'.' -f2 | cut -d'=' -f1)
+                uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read section; do
                     local enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
                     local interface=$(uci get network_switcher.$section.interface 2>/dev/null)
                     if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
@@ -615,11 +557,8 @@ main() {
         interfaces)
             get_available_interfaces
             ;;
-        schedule)
-            check_schedule
-            ;;
         *)
-            echo "网络切换器 - OpenWrt插件版（增强版）"
+            echo "网络切换器 - OpenWrt插件版"
             echo ""
             echo "用法: $0 [命令]"
             echo ""
@@ -637,7 +576,6 @@ main() {
             echo "其他:"
             echo "  daemon       - 守护进程模式"
             echo "  interfaces   - 获取可用接口列表"
-            echo "  schedule     - 检查定时任务"
             echo ""
             echo "配置: 通过LuCI界面或编辑 /etc/config/network_switcher"
             ;;
