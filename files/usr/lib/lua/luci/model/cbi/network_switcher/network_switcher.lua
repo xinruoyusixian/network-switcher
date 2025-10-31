@@ -1,12 +1,8 @@
+local uci = require("luci.model.uci").cursor()
+local sys = require("luci.sys")
+
 m = Map("network_switcher", "网络切换器配置", 
     "一个智能的网络接口切换器，支持自动故障切换和定时切换功能。")
-
--- 服务控制部分
-local service_s = m:section(TypedSection, "_service", "服务控制")
-service_s.anonymous = true
-
-local service_status = service_s:option(DummyValue, "_status", "服务状态")
-service_status.template = "network_switcher/service_status"
 
 -- 全局设置
 s = m:section(TypedSection, "settings", "全局设置")
@@ -31,13 +27,15 @@ check_interval.placeholder = "60"
 check_interval:depends("operation_mode", "auto")
 
 -- 网络测试设置
-local test_title = s:option(DummyValue, "test_settings", "网络测试设置")
-test_title.default = ""
+s:option(DummyValue, "test_settings", "网络测试设置")
 
 ping_targets = s:option(DynamicList, "ping_targets", "Ping目标", 
     "用于测试连通性的IP地址(每行一个)")
-ping_targets.default = "8.8.8.8 1.1.1.1 223.5.5.5 114.114.114.114"
-ping_targets.placeholder = "8.8.8.8"
+ping_targets.default = "8.8.8.8"
+ping_targets:value("8.8.8.8", "8.8.8.8 (Google)")
+ping_targets:value("1.1.1.1", "1.1.1.1 (Cloudflare)")
+ping_targets:value("223.5.5.5", "223.5.5.5 (阿里云)")
+ping_targets:value("114.114.114.114", "114.114.114.114 (114DNS)")
 
 ping_count = s:option(Value, "ping_count", "Ping次数", 
     "每次测试发送的ping包数量(1-10)")
@@ -58,7 +56,6 @@ switch_wait_time.default = "3"
 switch_wait_time.placeholder = "3"
 
 -- 获取可用接口
-local uci = require("luci.model.uci").cursor()
 local interface_list = { "wan", "wwan" }
 
 -- 从网络配置获取更多接口
@@ -102,10 +99,10 @@ schedule_enabled.default = "0"
 
 schedule_times = schedule_s:option(DynamicList, "times", "定时时间", 
     "切换时间，HH:MM格式(每行一个)")
-schedule_times.default = "08:00 18:00"
+schedule_times.default = "08:00"
 schedule_times.placeholder = "08:00"
 
--- 获取可用目标列表（包括auto和所有接口）
+-- 获取目标接口列表（包括auto选项）
 local target_list = {"auto"}
 for _, iface in ipairs(interface_list) do
     table.insert(target_list, iface)
@@ -113,31 +110,24 @@ end
 
 schedule_targets = schedule_s:option(DynamicList, "targets", "切换目标", 
     "每个时间对应的目标接口，使用'auto'表示自动模式")
-schedule_targets.default = "auto wwan"
-
--- 为每个target项添加下拉选择
-function schedule_targets.cfgvalue(self, section)
-    local value = Map.cfgvalue(self, section) or self.default
-    if type(value) == "table" then
-        return value
-    elseif type(value) == "string" then
-        return luci.util.split(value, " ")
-    end
-    return {}
+schedule_targets.default = "auto"
+schedule_targets.placeholder = "auto"
+for _, target in ipairs(target_list) do
+    schedule_targets:value(target, target)
 end
 
 -- 快速操作部分
-local actions_s = m:section(TypedSection, "_actions", "快速操作")
+actions_s = m:section(TypedSection, "_actions", "快速操作")
 actions_s.anonymous = true
 
-local status_btn = actions_s:option(Button, "_status", "当前状态")
+status_btn = actions_s:option(Button, "_status", "当前状态")
 status_btn.inputtitle = "刷新状态"
 status_btn.inputstyle = "apply"
 function status_btn.write()
     luci.http.redirect(luci.dispatcher.build_url("admin/services/network_switcher/overview"))
 end
 
-local test_btn = actions_s:option(Button, "_test", "测试连通性")
+test_btn = actions_s:option(Button, "_test", "测试连通性")
 test_btn.inputtitle = "立即测试"
 test_btn.inputstyle = "apply"
 function test_btn.write()
