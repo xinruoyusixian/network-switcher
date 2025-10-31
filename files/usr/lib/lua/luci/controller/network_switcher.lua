@@ -18,6 +18,8 @@ function index()
     entry({"admin", "services", "network_switcher", "service_control"}, call("action_service_control"))
     entry({"admin", "services", "network_switcher", "clear_log"}, call("action_clear_log"))
     entry({"admin", "services", "network_switcher", "get_interfaces"}, call("action_get_interfaces"))
+    entry({"admin", "services", "network_switcher", "get_configured_interfaces"}, call("action_get_configured_interfaces"))
+    entry({"admin", "services", "network_switcher", "get_current_interface"}, call("action_get_current_interface"))
 end
 
 function action_status()
@@ -51,7 +53,8 @@ function action_switch()
     
     if interface then
         -- 实时执行并获取输出
-        local handle = io.popen("/usr/bin/network_switcher switch " .. interface .. " 2>&1")
+        local command = interface == "auto" and "auto" or "switch " .. interface
+        local handle = io.popen("/usr/bin/network_switcher " .. command .. " 2>&1")
         local result = handle:read("*a")
         handle:close()
         
@@ -151,4 +154,31 @@ function action_get_interfaces()
     
     lucihttp.prepare_content("application/json")
     lucihttp.write_json(interface_list)
+end
+
+function action_get_configured_interfaces()
+    local lucihttp = require("luci.http")
+    local sys = require("luci.sys")
+    
+    local interfaces = sys.exec("/usr/bin/network_switcher configured_interfaces 2>/dev/null")
+    local interface_list = {}
+    
+    for line in interfaces:gmatch("[^\r\n]+") do
+        if line ~= "" then
+            table.insert(interface_list, line)
+        end
+    end
+    
+    lucihttp.prepare_content("application/json")
+    lucihttp.write_json(interface_list)
+end
+
+function action_get_current_interface()
+    local lucihttp = require("luci.http")
+    local sys = require("luci.sys")
+    
+    local current_interface = sys.exec("/usr/bin/network_switcher current_interface 2>/dev/null")
+    
+    lucihttp.prepare_content("text/plain")
+    lucihttp.write(current_interface)
 end
