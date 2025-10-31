@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=network-switcher
-PKG_VERSION:=1.0.0
+PKG_VERSION:=1.0.1
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=Your Name <your@email.com>
@@ -13,14 +13,14 @@ define Package/network-switcher
   SECTION:=net
   CATEGORY:=Network
   SUBMENU:=Routing and Redirection
-  TITLE:=Intelligent Network Interface Switcher
+  TITLE:=智能网络接口切换器
   DEPENDS:=+lua +luci-lib-json +luci-lib-nixio
   PKGARCH:=all
 endef
 
 define Package/network-switcher/description
-  An intelligent network interface switcher with LuCI web interface support.
-  Provides automatic failover between WAN and WWAN interfaces.
+  一个智能的网络接口切换器，支持LuCI网页界面。
+  提供WAN和WWAN接口之间的自动故障切换功能。
 endef
 
 define Build/Configure
@@ -50,9 +50,9 @@ endef
 define Package/network-switcher/postinst
 #!/bin/sh
 if [ -z "$${IPKG_INSTROOT}" ]; then
-    echo "Enabling network_switcher service..."
+    echo "启用network_switcher服务..."
     /etc/init.d/network_switcher enable
-    echo "You can configure Network Switcher in LuCI: Services -> Network Switcher"
+    echo "你可以在LuCI中配置网络切换器: 服务 -> 网络切换器"
 fi
 exit 0
 endef
