@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # ==============================================
-# 网络切换脚本 - OpenWrt插件版 v1.1.0
+# 网络切换脚本 - OpenWrt插件版 v1.1.1
 # ==============================================
 
 # 环境设置
@@ -21,12 +21,12 @@ DAEMON_MODE=0
 read_uci_config() {
     # 基本设置
     ENABLED=$(uci get network_switcher.settings.enabled 2>/dev/null || echo "0")
-    OPERATION_MODE=$(uci get network_switcher.settings.operation_mode 2>/dev/null || echo "auto")
     CHECK_INTERVAL=$(uci get network_switcher.settings.check_interval 2>/dev/null || echo "60")
     PING_TARGETS=$(uci get network_switcher.settings.ping_targets 2>/dev/null || echo "8.8.8.8 1.1.1.1 223.5.5.5")
     PING_COUNT=$(uci get network_switcher.settings.ping_count 2>/dev/null || echo "3")
     PING_TIMEOUT=$(uci get network_switcher.settings.ping_timeout 2>/dev/null || echo "3")
     SWITCH_WAIT_TIME=$(uci get network_switcher.settings.switch_wait_time 2>/dev/null || echo "3")
+    PING_SUCCESS_COUNT=$(uci get network_switcher.settings.ping_success_count 2>/dev/null || echo "1")
     
     # 读取接口配置
     INTERFACES=""
@@ -45,11 +45,6 @@ read_uci_config() {
     # 设置主要接口
     WAN_INTERFACE=$(echo $INTERFACES | awk '{print $1}')
     WWAN_INTERFACE=$(echo $INTERFACES | awk '{print $2}')
-    
-    # 读取定时任务
-    SCHEDULE_ENABLED=$(uci get network_switcher.schedule.enabled 2>/dev/null || echo "0")
-    SCHEDULE_TIMES=$(uci get network_switcher.schedule.times 2>/dev/null || echo "")
-    SCHEDULE_TARGETS=$(uci get network_switcher.schedule.targets 2>/dev/null || echo "")
 }
 
 # ==============================================
@@ -120,6 +115,16 @@ check_interface_config() {
     return 0
 }
 
+# 验证接口是否存在
+validate_interface() {
+    local interface="$1"
+    if ubus call network.interface."$interface" status >/dev/null 2>&1; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 # 服务控制函数
 service_control() {
     local action="$1"
@@ -136,6 +141,23 @@ service_control() {
             # 检查接口配置
             if ! check_interface_config; then
                 echo "服务启动失败: 接口未配置"
+                return 1
+            fi
+            
+            # 验证所有启用的接口是否存在
+            local invalid_interfaces=""
+            uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read section; do
+                local enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
+                local interface=$(uci get network_switcher.$section.interface 2>/dev/null)
+                if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
+                    if ! validate_interface "$interface"; then
+                        invalid_interfaces="$invalid_interfaces $interface"
+                    fi
+                fi
+            done
+            
+            if [ -n "$invalid_interfaces" ]; then
+                echo "服务启动失败: 以下接口不存在: $invalid_interfaces"
                 return 1
             fi
             
@@ -298,15 +320,24 @@ test_network_connectivity() {
     
     local success_count=0
     local test_targets="$PING_TARGETS"
+    local required_success=$PING_SUCCESS_COUNT
+    
+    # 计算实际需要的成功次数（不能大于目标数量）
+    local target_count=$(echo "$test_targets" | wc -w)
+    if [ $required_success -gt $target_count ]; then
+        required_success=$target_count
+    fi
     
     for target in $test_targets; do
         if ping -I "$device" -c $PING_COUNT -W $PING_TIMEOUT "$target" >/dev/null 2>&1; then
             success_count=$((success_count + 1))
-            break
+            if [ $success_count -ge $required_success ]; then
+                break
+            fi
         fi
     done
     
-    if [ "$success_count" -ge 1 ]; then
+    if [ $success_count -ge $required_success ]; then
         return 0
     else
         return 1
@@ -484,11 +515,7 @@ show_status() {
     
     echo "=== 网络切换器状态 ==="
     echo "服务状态: $(service_control status)"
-    echo "运行模式: $OPERATION_MODE"
-    if [ "$OPERATION_MODE" = "auto" ]; then
-        echo "检查间隔: ${CHECK_INTERVAL}秒"
-    fi
-    echo "定时任务: $([ "$SCHEDULE_ENABLED" = "1" ] && echo "已启用" || echo "已禁用")"
+    echo "检查间隔: ${CHECK_INTERVAL}秒"
     echo ""
     
     # 当前互联网出口接口
@@ -536,6 +563,7 @@ test_connectivity() {
     
     echo "=== 网络连通性测试 ==="
     echo "测试目标: $PING_TARGETS"
+    echo "成功要求: $PING_SUCCESS_COUNT/$PING_COUNT"
     echo ""
     
     local has_enabled_interfaces=0
@@ -567,7 +595,18 @@ test_connectivity() {
                         echo "✗ 失败"
                     fi
                 done
-                echo "  总体结果: $([ $success_count -ge 1 ] && echo "✓ 通过" || echo "✗ 失败")"
+                
+                local target_count=$(echo "$PING_TARGETS" | wc -w)
+                local required_success=$PING_SUCCESS_COUNT
+                if [ $required_success -gt $target_count ]; then
+                    required_success=$target_count
+                fi
+                
+                if [ $success_count -ge $required_success ]; then
+                    echo "  总体结果: ✓ 通过 ($success_count/$required_success)"
+                else
+                    echo "  总体结果: ✗ 失败 ($success_count/$required_success)"
+                fi
             fi
             echo ""
         fi
@@ -590,9 +629,7 @@ run_daemon() {
         
         if [ "$ENABLED" = "1" ]; then
             # 自动模式检查
-            if [ "$OPERATION_MODE" = "auto" ]; then
-                auto_switch
-            fi
+            auto_switch
         else
             # 如果服务被禁用，退出守护进程
             log "服务已禁用，停止守护进程" "SERVICE"
@@ -606,10 +643,9 @@ run_daemon() {
 # 获取可用接口列表
 get_available_interfaces() {
     echo "wan"
-    echo "wwan"
     # 从网络配置中获取更多接口
     uci show network | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read iface; do
-        if [ "$iface" != "wan" ] && [ "$iface" != "wwan" ] && [ "$iface" != "loopback" ]; then
+        if [ "$iface" != "wan" ] && [ "$iface" != "loopback" ]; then
             echo "$iface"
         fi
     done
@@ -673,7 +709,7 @@ main() {
             get_current_internet_interface
             ;;
         *)
-            echo "网络切换器 - OpenWrt插件版 v1.1.0"
+            echo "网络切换器 - OpenWrt插件版 v1.1.1"
             echo ""
             echo "用法: $0 [命令]"
             echo ""
