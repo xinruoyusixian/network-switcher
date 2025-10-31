@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # ==============================================
-# 网络切换脚本 - OpenWrt插件版 v1.2.0
+# 网络切换脚本 - OpenWrt插件版 v1.2.1
 # ==============================================
 
 export PATH="/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin"
@@ -19,7 +19,7 @@ STATE_FILE="/var/state/network_switcher.state"
 PID_FILE="/var/run/network_switcher.pid"
 
 # ==============================================
-# 配置读取函数
+# 配置读取函数 - 修复重复接口问题
 # ==============================================
 
 read_uci_config() {
@@ -44,16 +44,16 @@ read_uci_config() {
         PING_TARGETS="8.8.8.8 1.1.1.1 223.5.5.5"
     fi
     
-    # 读取接口配置
+    # 读取接口配置 - 修复重复接口问题
     INTERFACES=""
     INTERFACE_COUNT=0
     PRIMARY_INTERFACE=""
-    
-    # 处理所有接口配置段
-    local config_output=$(uci show network_switcher 2>/dev/null)
+    local seen_interfaces=""
     
     # 处理命名接口
-    for section in $(echo "$config_output" | grep "network_switcher.*=interface" | cut -d'.' -f2 | cut -d'=' -f1); do
+    local config_sections=$(uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1)
+    
+    for section in $config_sections; do
         if [ "$section" = "settings" ] || [ "$section" = "schedule" ]; then
             continue
         fi
@@ -63,8 +63,15 @@ read_uci_config() {
         local primary=$(uci -q get network_switcher.$section.primary || echo "0")
         
         if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
+            # 检查是否已经见过这个接口（避免重复）
+            if echo "$seen_interfaces" | grep -q "\b$interface\b"; then
+                echo "跳过重复接口: $interface"
+                continue
+            fi
+            
             INTERFACE_COUNT=$((INTERFACE_COUNT + 1))
             INTERFACES="$INTERFACES $interface"
+            seen_interfaces="$seen_interfaces $interface"
             
             if [ "$primary" = "1" ]; then
                 PRIMARY_INTERFACE="$interface"
@@ -72,7 +79,7 @@ read_uci_config() {
         fi
     done
     
-    # 处理匿名接口
+    # 处理匿名接口（如果有的话）
     local anonymous_count=0
     while uci -q get network_switcher.@interface[$anonymous_count] >/dev/null; do
         local enabled=$(uci -q get network_switcher.@interface[$anonymous_count].enabled || echo "1")
@@ -80,8 +87,16 @@ read_uci_config() {
         local primary=$(uci -q get network_switcher.@interface[$anonymous_count].primary || echo "0")
         
         if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
+            # 检查是否已经见过这个接口（避免重复）
+            if echo "$seen_interfaces" | grep -q "\b$interface\b"; then
+                echo "跳过重复匿名接口: $interface"
+                anonymous_count=$((anonymous_count + 1))
+                continue
+            fi
+            
             INTERFACE_COUNT=$((INTERFACE_COUNT + 1))
             INTERFACES="$INTERFACES $interface"
+            seen_interfaces="$seen_interfaces $interface"
             
             if [ "$primary" = "1" ]; then
                 PRIMARY_INTERFACE="$interface"
@@ -108,19 +123,77 @@ log() {
     echo "[$timestamp] $message" >> "$LOG_FILE"
 }
 
+# 改进的锁机制
 acquire_lock() {
-    if [ -f "$LOCK_FILE" ]; then
-        local lock_pid=$(cat "$LOCK_FILE" 2>/dev/null)
-        if [ -n "$lock_pid" ] && [ -d "/proc/$lock_pid" ]; then
-            echo "另一个实例正在运行 (PID: $lock_pid)"
-            exit 1
+    local max_retries=3
+    local retry_count=0
+    
+    while [ $retry_count -lt $max_retries ]; do
+        if [ -f "$LOCK_FILE" ]; then
+            local lock_pid=$(cat "$LOCK_FILE" 2>/dev/null)
+            if [ -n "$lock_pid" ] && [ -d "/proc/$lock_pid" ]; then
+                echo "另一个实例正在运行 (PID: $lock_pid)，等待..."
+                retry_count=$((retry_count + 1))
+                sleep 2
+                continue
+            else
+                # 锁文件存在但进程不存在，清理锁文件
+                echo "清理过期的锁文件"
+                rm -f "$LOCK_FILE"
+            fi
         fi
-    fi
-    echo $$ > "$LOCK_FILE"
+        
+        echo $$ > "$LOCK_FILE"
+        if [ -f "$LOCK_FILE" ] && [ "$(cat "$LOCK_FILE" 2>/dev/null)" = "$$" ]; then
+            return 0
+        fi
+        
+        retry_count=$((retry_count + 1))
+        sleep 1
+    done
+    
+    echo "无法获取锁，退出"
+    exit 1
 }
 
 release_lock() {
-    rm -f "$LOCK_FILE"
+    if [ -f "$LOCK_FILE" ] && [ "$(cat "$LOCK_FILE" 2>/dev/null)" = "$$" ]; then
+        rm -f "$LOCK_FILE"
+    fi
+}
+
+# 清理残留进程和文件
+cleanup_stale_processes() {
+    echo "清理残留进程和文件..."
+    
+    # 清理锁文件
+    if [ -f "$LOCK_FILE" ]; then
+        local lock_pid=$(cat "$LOCK_FILE" 2>/dev/null)
+        if [ -z "$lock_pid" ] || [ ! -d "/proc/$lock_pid" ]; then
+            rm -f "$LOCK_FILE"
+            echo "清理过期的锁文件"
+        fi
+    fi
+    
+    # 清理PID文件
+    if [ -f "$PID_FILE" ]; then
+        local pid=$(cat "$PID_FILE" 2>/dev/null)
+        if [ -z "$pid" ] || [ ! -d "/proc/$pid" ]; then
+            rm -f "$PID_FILE"
+            echo "清理过期的PID文件"
+        fi
+    fi
+    
+    # 杀死残留的守护进程
+    local stale_pids=$(pgrep -f "network_switcher daemon" 2>/dev/null)
+    if [ -n "$stale_pids" ]; then
+        for pid in $stale_pids; do
+            if [ "$pid" != "$$" ]; then
+                kill $pid 2>/dev/null
+                echo "杀死残留进程: $pid"
+            fi
+        done
+    fi
 }
 
 # 服务控制
@@ -130,7 +203,14 @@ service_control() {
     case "$action" in
         "start")
             echo "正在启动网络切换服务..."
+            
+            # 先清理残留
+            cleanup_stale_processes
+            
             read_uci_config
+            
+            echo "接口数量: $INTERFACE_COUNT"
+            echo "接口列表: $INTERFACES"
             
             if [ $INTERFACE_COUNT -eq 0 ]; then
                 echo "错误: 未配置任何有效的网络接口"
@@ -155,7 +235,7 @@ service_control() {
             run_daemon &
             local pid=$!
             echo $pid > "$PID_FILE"
-            sleep 2
+            sleep 3
             
             if [ -d "/proc/$pid" ]; then
                 echo "服务启动成功 (PID: $pid)"
@@ -168,40 +248,39 @@ service_control() {
             ;;
         "stop")
             echo "正在停止网络切换服务..."
+            
+            # 先清理残留
+            cleanup_stale_processes
+            
             if [ -f "$PID_FILE" ]; then
                 local pid=$(cat "$PID_FILE")
                 if [ -d "/proc/$pid" ]; then
+                    echo "停止服务 (PID: $pid)"
                     kill $pid 2>/dev/null
-                    sleep 1
+                    sleep 2
+                    
                     if [ -d "/proc/$pid" ]; then
                         kill -9 $pid 2>/dev/null
-                        echo "强制停止服务 (PID: $pid)"
-                    else
-                        echo "服务停止成功 (PID: $pid)"
+                        echo "强制停止服务"
                     fi
+                    
                     log "停止网络切换服务" "SERVICE"
                 else
                     echo "服务未运行"
                 fi
                 rm -f "$PID_FILE"
             else
-                # 如果没有PID文件，尝试通过进程名停止
-                local pids=$(pgrep -f "network_switcher daemon" 2>/dev/null)
-                if [ -n "$pids" ]; then
-                    for pid in $pids; do
-                        kill $pid 2>/dev/null
-                        echo "停止进程: $pid"
-                    done
-                    echo "服务停止成功"
-                else
-                    echo "服务未运行"
-                fi
+                echo "服务未运行（无PID文件）"
             fi
+            
+            # 确保清理锁文件
+            release_lock
+            echo "服务停止完成"
             ;;
         "restart")
             echo "正在重启网络切换服务..."
             service_control stop
-            sleep 2
+            sleep 3
             service_control start
             ;;
         "status")
@@ -211,12 +290,12 @@ service_control() {
                     echo "运行中 (PID: $pid)"
                     return 0
                 else
-                    echo "已停止"
+                    echo "已停止（PID文件存在但进程不存在）"
                     return 1
                 fi
             else
                 if pgrep -f "network_switcher daemon" >/dev/null 2>&1; then
-                    echo "运行中"
+                    echo "运行中（无PID文件）"
                     return 0
                 else
                     echo "已停止"
@@ -227,7 +306,7 @@ service_control() {
     esac
 }
 
-# 获取已配置接口
+# 获取已配置接口（去重）
 get_configured_interfaces() {
     read_uci_config
     for iface in $INTERFACES; do
@@ -529,6 +608,9 @@ run_daemon() {
     echo "启动守护进程 (PID: $$)"
     log "启动守护进程" "SERVICE"
     
+    # 设置信号处理
+    trap 'echo "收到信号，退出守护进程"; exit 0' TERM INT
+    
     while true; do
         read_uci_config
         
@@ -596,8 +678,11 @@ main() {
         current_interface)
             ip route show default 2>/dev/null | head -1 | awk '{print $5}'
             ;;
+        cleanup)
+            cleanup_stale_processes
+            ;;
         *)
-            echo "网络切换器 v1.2.0"
+            echo "网络切换器 v1.2.1"
             echo ""
             echo "用法: $0 <命令>"
             echo ""
@@ -613,6 +698,7 @@ main() {
             echo "  configured_interfaces 已配置接口"
             echo "  clear_log   清空日志"
             echo "  current_interface 当前接口"
+            echo "  cleanup     清理残留进程"
             ;;
     esac
 }
