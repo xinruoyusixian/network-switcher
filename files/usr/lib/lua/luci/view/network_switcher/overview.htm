@@ -34,6 +34,13 @@
             </div>
             
             <div class="cbi-value">
+                <label class="cbi-value-title">主接口</label>
+                <div class="cbi-value-field">
+                    <span id="primary-interface" style="font-weight: bold;">-</span>
+                </div>
+            </div>
+            
+            <div class="cbi-value">
                 <label class="cbi-value-title">服务状态</label>
                 <div class="cbi-value-field">
                     <span id="service-status">-</span>
@@ -65,7 +72,7 @@
                 <button class="cbi-button cbi-button-positive" onclick="autoSwitch()">
                     执行自动切换
                 </button>
-                <span style="margin-left: 10px; color: #666;">根据接口优先级自动选择最佳接口</span>
+                <span style="margin-left: 10px; color: #666;">优先使用主接口，否则按优先级选择</span>
             </div>
         </div>
         
@@ -154,11 +161,20 @@ function refreshStatus() {
                 // 更新服务状态
                 updateServiceStatus(response.service);
                 
-                // 从状态输出中提取当前接口
+                // 从状态输出中提取当前接口和主接口
                 var statusText = response.status_output;
                 var currentInterfaceMatch = statusText.match(/当前互联网出口:\s*(\S+)/);
                 if (currentInterfaceMatch) {
                     document.getElementById('current-interface').textContent = currentInterfaceMatch[1];
+                } else {
+                    document.getElementById('current-interface').textContent = '-';
+                }
+                
+                var primaryInterfaceMatch = statusText.match(/主接口:\s*(\S+)/);
+                if (primaryInterfaceMatch) {
+                    document.getElementById('primary-interface').textContent = primaryInterfaceMatch[1];
+                } else {
+                    document.getElementById('primary-interface').textContent = '-';
                 }
                 
                 // 更新详细状态输出
@@ -268,7 +284,7 @@ function switchInterface() {
 
 // 自动切换
 function autoSwitch() {
-    if (!confirm('确定要执行自动切换吗？系统将根据接口优先级自动选择最佳接口。')) {
+    if (!confirm('确定要执行自动切换吗？系统将优先使用主接口，否则按接口优先级选择。')) {
         return;
     }
     
