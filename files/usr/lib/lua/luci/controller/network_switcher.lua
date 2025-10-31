@@ -170,11 +170,6 @@ function action_get_configured_interfaces()
         end
     end
     
-    -- 如果没有获取到接口，添加默认的wan接口
-    if #interface_list == 0 then
-        table.insert(interface_list, "wan")
-    end
-    
     lucihttp.prepare_content("application/json")
     lucihttp.write_json(interface_list)
 end
