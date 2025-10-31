@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # ==============================================
-# 网络切换脚本 - OpenWrt插件版 v1.2.1
+# 网络切换脚本 - OpenWrt插件版 v1.2.2
 # ==============================================
 
 export PATH="/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/sbin:/usr/local/bin"
@@ -19,7 +19,7 @@ STATE_FILE="/var/state/network_switcher.state"
 PID_FILE="/var/run/network_switcher.pid"
 
 # ==============================================
-# 配置读取函数 - 修复重复接口问题
+# 配置读取函数 - 修复版本
 # ==============================================
 
 read_uci_config() {
@@ -44,7 +44,7 @@ read_uci_config() {
         PING_TARGETS="8.8.8.8 1.1.1.1 223.5.5.5"
     fi
     
-    # 读取接口配置 - 修复重复接口问题
+    # 读取接口配置 - 修复版本，不输出调试信息
     INTERFACES=""
     INTERFACE_COUNT=0
     PRIMARY_INTERFACE=""
@@ -65,7 +65,6 @@ read_uci_config() {
         if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
             # 检查是否已经见过这个接口（避免重复）
             if echo "$seen_interfaces" | grep -q "\b$interface\b"; then
-                echo "跳过重复接口: $interface"
                 continue
             fi
             
@@ -89,7 +88,6 @@ read_uci_config() {
         if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
             # 检查是否已经见过这个接口（避免重复）
             if echo "$seen_interfaces" | grep -q "\b$interface\b"; then
-                echo "跳过重复匿名接口: $interface"
                 anonymous_count=$((anonymous_count + 1))
                 continue
             fi
@@ -123,27 +121,24 @@ log() {
     echo "[$timestamp] $message" >> "$LOG_FILE"
 }
 
-# 改进的锁机制
-acquire_lock() {
-    local max_retries=3
+# 改进的锁机制 - 不输出错误信息
+acquire_lock_silent() {
+    local max_retries=2
     local retry_count=0
     
     while [ $retry_count -lt $max_retries ]; do
         if [ -f "$LOCK_FILE" ]; then
             local lock_pid=$(cat "$LOCK_FILE" 2>/dev/null)
             if [ -n "$lock_pid" ] && [ -d "/proc/$lock_pid" ]; then
-                echo "另一个实例正在运行 (PID: $lock_pid)，等待..."
                 retry_count=$((retry_count + 1))
-                sleep 2
+                sleep 1
                 continue
             else
-                # 锁文件存在但进程不存在，清理锁文件
-                echo "清理过期的锁文件"
-                rm -f "$LOCK_FILE"
+                rm -f "$LOCK_FILE" 2>/dev/null
             fi
         fi
         
-        echo $$ > "$LOCK_FILE"
+        echo $$ > "$LOCK_FILE" 2>/dev/null
         if [ -f "$LOCK_FILE" ] && [ "$(cat "$LOCK_FILE" 2>/dev/null)" = "$$" ]; then
             return 0
         fi
@@ -152,8 +147,14 @@ acquire_lock() {
         sleep 1
     done
     
-    echo "无法获取锁，退出"
-    exit 1
+    return 1
+}
+
+acquire_lock() {
+    if ! acquire_lock_silent; then
+        echo "另一个实例正在运行，无法获取锁"
+        exit 1
+    fi
 }
 
 release_lock() {
@@ -164,14 +165,11 @@ release_lock() {
 
 # 清理残留进程和文件
 cleanup_stale_processes() {
-    echo "清理残留进程和文件..."
-    
     # 清理锁文件
     if [ -f "$LOCK_FILE" ]; then
         local lock_pid=$(cat "$LOCK_FILE" 2>/dev/null)
         if [ -z "$lock_pid" ] || [ ! -d "/proc/$lock_pid" ]; then
             rm -f "$LOCK_FILE"
-            echo "清理过期的锁文件"
         fi
     fi
     
@@ -180,7 +178,6 @@ cleanup_stale_processes() {
         local pid=$(cat "$PID_FILE" 2>/dev/null)
         if [ -z "$pid" ] || [ ! -d "/proc/$pid" ]; then
             rm -f "$PID_FILE"
-            echo "清理过期的PID文件"
         fi
     fi
     
@@ -190,7 +187,6 @@ cleanup_stale_processes() {
         for pid in $stale_pids; do
             if [ "$pid" != "$$" ]; then
                 kill $pid 2>/dev/null
-                echo "杀死残留进程: $pid"
             fi
         done
     fi
@@ -208,9 +204,6 @@ service_control() {
             cleanup_stale_processes
             
             read_uci_config
-            
-            echo "接口数量: $INTERFACE_COUNT"
-            echo "接口列表: $INTERFACES"
             
             if [ $INTERFACE_COUNT -eq 0 ]; then
                 echo "错误: 未配置任何有效的网络接口"
@@ -231,15 +224,13 @@ service_control() {
             log "启动网络切换服务" "SERVICE"
             
             # 启动守护进程
-            echo "启动守护进程..."
             run_daemon &
             local pid=$!
             echo $pid > "$PID_FILE"
-            sleep 3
+            sleep 2
             
             if [ -d "/proc/$pid" ]; then
                 echo "服务启动成功 (PID: $pid)"
-                echo "已配置接口: $INTERFACES"
                 return 0
             else
                 echo "服务启动失败"
@@ -270,7 +261,7 @@ service_control() {
                 fi
                 rm -f "$PID_FILE"
             else
-                echo "服务未运行（无PID文件）"
+                echo "服务未运行"
             fi
             
             # 确保清理锁文件
@@ -280,7 +271,7 @@ service_control() {
         "restart")
             echo "正在重启网络切换服务..."
             service_control stop
-            sleep 3
+            sleep 2
             service_control start
             ;;
         "status")
@@ -290,12 +281,12 @@ service_control() {
                     echo "运行中 (PID: $pid)"
                     return 0
                 else
-                    echo "已停止（PID文件存在但进程不存在）"
+                    echo "已停止"
                     return 1
                 fi
             else
                 if pgrep -f "network_switcher daemon" >/dev/null 2>&1; then
-                    echo "运行中（无PID文件）"
+                    echo "运行中"
                     return 0
                 else
                     echo "已停止"
@@ -306,12 +297,20 @@ service_control() {
     esac
 }
 
-# 获取已配置接口（去重）
+# 获取已配置接口（只返回接口名称，无调试信息）
 get_configured_interfaces() {
-    read_uci_config
-    for iface in $INTERFACES; do
-        echo "$iface"
-    done
+    # 使用静默锁，如果获取不到锁就跳过
+    if acquire_lock_silent; then
+        read_uci_config
+        for iface in $INTERFACES; do
+            echo "$iface"
+        done
+        release_lock
+    else
+        # 如果获取不到锁，直接从UCI读取（可能不完整但不会阻塞）
+        uci show network_switcher 2>/dev/null | grep -E "(\.interface=|@interface\[.*\.interface=)" | \
+        awk -F'=' '{print $2}' | tr -d "'" | sort | uniq
+    fi
 }
 
 # 获取接口设备
@@ -409,32 +408,25 @@ switch_interface() {
         anonymous_count=$((anonymous_count + 1))
     done
     
-    echo "执行路由切换: 接口=$device, 网关=$gateway, 优先级=$metric"
-    
-    # 删除现有默认路由
+    # 执行切换
     ip route del default 2>/dev/null
+    ip route replace default via "$gateway" dev "$device" metric "$metric"
     
-    # 添加新默认路由
-    if ip route replace default via "$gateway" dev "$device" metric "$metric"; then
-        echo "路由设置成功"
-        sleep $SWITCH_WAIT_TIME
-        
-        # 验证切换
-        local current_device=$(ip route show default 2>/dev/null | head -1 | awk '{print $5}')
-        if [ "$current_device" = "$device" ]; then
-            if test_network_connectivity "$target_interface"; then
-                echo "切换到 $target_interface 成功"
-                log "切换到 $target_interface 成功" "SWITCH"
-                echo "$target_interface" > "$STATE_FILE"
-                return 0
-            else
-                echo "切换后网络测试失败"
-            fi
+    sleep $SWITCH_WAIT_TIME
+    
+    # 验证切换
+    local current_device=$(ip route show default 2>/dev/null | head -1 | awk '{print $5}')
+    if [ "$current_device" = "$device" ]; then
+        if test_network_connectivity "$target_interface"; then
+            echo "切换到 $target_interface 成功"
+            log "切换到 $target_interface 成功" "SWITCH"
+            echo "$target_interface" > "$STATE_FILE"
+            return 0
         else
-            echo "路由切换验证失败，当前设备: $current_device, 期望设备: $device"
+            echo "切换后网络测试失败"
         fi
     else
-        echo "路由设置失败"
+        echo "路由切换验证失败"
     fi
     
     echo "切换验证失败"
@@ -451,44 +443,32 @@ auto_switch() {
         return 0
     fi
     
-    echo "开始自动切换..."
-    
     # 优先尝试主接口
     if [ -n "$PRIMARY_INTERFACE" ]; then
-        echo "检查主接口: $PRIMARY_INTERFACE"
         if is_interface_available "$PRIMARY_INTERFACE" && test_network_connectivity "$PRIMARY_INTERFACE"; then
             local current_device=$(ip route show default 2>/dev/null | head -1 | awk '{print $5}')
             local primary_device=$(get_interface_device "$PRIMARY_INTERFACE")
             
             if [ "$current_device" != "$primary_device" ]; then
-                echo "主接口可用，执行切换"
                 switch_interface "$PRIMARY_INTERFACE" && return 0
             else
-                echo "已经是主接口且连通正常"
                 return 0
             fi
-        else
-            echo "主接口不可用"
         fi
     fi
     
     # 尝试其他接口
     for interface in $INTERFACES; do
         if [ "$interface" != "$PRIMARY_INTERFACE" ]; then
-            echo "检查接口: $interface"
             if is_interface_available "$interface" && test_network_connectivity "$interface"; then
                 local current_device=$(ip route show default 2>/dev/null | head -1 | awk '{print $5}')
                 local target_device=$(get_interface_device "$interface")
                 
                 if [ "$current_device" != "$target_device" ]; then
-                    echo "接口 $interface 可用，执行切换"
                     switch_interface "$interface" && return 0
                 else
-                    echo "已经是当前接口且连通正常"
                     return 0
                 fi
-            else
-                echo "接口 $interface 不可用"
             fi
         fi
     done
@@ -559,7 +539,6 @@ test_connectivity() {
     
     echo "=== 网络连通性测试 ==="
     echo "测试目标: $PING_TARGETS"
-    echo "成功要求: $PING_SUCCESS_COUNT 个目标通过"
     echo ""
     
     if [ $INTERFACE_COUNT -eq 0 ]; then
@@ -577,7 +556,6 @@ test_connectivity() {
         fi
         
         echo "  设备: $device"
-        echo "  基本状态: $(is_interface_available "$interface" && echo "✓ 可用" || echo "✗ 不可用")"
         
         if is_interface_available "$interface"; then
             echo "  Ping测试:"
@@ -598,6 +576,8 @@ test_connectivity() {
             else
                 echo "  总体结果: ✗ 失败 ($success_count/$PING_SUCCESS_COUNT)"
             fi
+        else
+            echo "  接口不可用"
         fi
         echo ""
     done
@@ -605,11 +585,10 @@ test_connectivity() {
 
 # 守护进程
 run_daemon() {
-    echo "启动守护进程 (PID: $$)"
     log "启动守护进程" "SERVICE"
     
     # 设置信号处理
-    trap 'echo "收到信号，退出守护进程"; exit 0' TERM INT
+    trap 'log "收到信号，退出守护进程" "SERVICE"; exit 0' TERM INT
     
     while true; do
         read_uci_config
@@ -617,7 +596,7 @@ run_daemon() {
         if [ "$ENABLED" = "1" ] && [ $INTERFACE_COUNT -gt 0 ]; then
             auto_switch
         else
-            echo "服务已禁用或无接口配置，退出守护进程"
+            log "服务已禁用或无接口配置，退出守护进程" "SERVICE"
             break
         fi
         
@@ -682,7 +661,7 @@ main() {
             cleanup_stale_processes
             ;;
         *)
-            echo "网络切换器 v1.2.1"
+            echo "网络切换器 v1.2.2"
             echo ""
             echo "用法: $0 <命令>"
             echo ""
