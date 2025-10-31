@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # ==============================================
-# 网络切换脚本 - OpenWrt插件版 v1.1.1
+# 网络切换脚本 - OpenWrt插件版 v1.2.0
 # ==============================================
 
 # 环境设置
@@ -31,20 +31,35 @@ read_uci_config() {
     # 读取接口配置
     INTERFACES=""
     INTERFACE_COUNT=0
+    PRIMARY_INTERFACE=""
+    
+    # 先查找主接口
     uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read section; do
         if [ "$section" != "settings" ] && [ "$section" != "schedule" ]; then
-            local iface_enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
-            local iface_name=$(uci get network_switcher.$section.interface 2>/dev/null)
-            if [ "$iface_enabled" = "1" ] && [ -n "$iface_name" ]; then
-                INTERFACES="$INTERFACES $iface_name"
+            local enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
+            local interface=$(uci get network_switcher.$section.interface 2>/dev/null)
+            local primary=$(uci get network_switcher.$section.primary 2>/dev/null || echo "0")
+            
+            if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
                 INTERFACE_COUNT=$((INTERFACE_COUNT + 1))
+                INTERFACES="$INTERFACES $interface"
+                
+                if [ "$primary" = "1" ]; then
+                    PRIMARY_INTERFACE="$interface"
+                fi
             fi
         fi
     done
     
-    # 设置主要接口
-    WAN_INTERFACE=$(echo $INTERFACES | awk '{print $1}')
-    WWAN_INTERFACE=$(echo $INTERFACES | awk '{print $2}')
+    # 如果没有设置主接口，使用第一个启用的接口
+    if [ -z "$PRIMARY_INTERFACE" ] && [ $INTERFACE_COUNT -gt 0 ]; then
+        PRIMARY_INTERFACE=$(echo $INTERFACES | awk '{print $1}')
+    fi
+    
+    # 读取定时任务
+    SCHEDULE_ENABLED=$(uci get network_switcher.schedule.enabled 2>/dev/null || echo "0")
+    SCHEDULE_TIMES=$(uci get network_switcher.schedule.times 2>/dev/null || echo "")
+    SCHEDULE_TARGETS=$(uci get network_switcher.schedule.targets 2>/dev/null || echo "")
 }
 
 # ==============================================
@@ -146,19 +161,28 @@ service_control() {
             
             # 验证所有启用的接口是否存在
             local invalid_interfaces=""
+            local has_valid_interface=0
+            
             uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read section; do
                 local enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
                 local interface=$(uci get network_switcher.$section.interface 2>/dev/null)
                 if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
-                    if ! validate_interface "$interface"; then
+                    if validate_interface "$interface"; then
+                        has_valid_interface=1
+                    else
                         invalid_interfaces="$invalid_interfaces $interface"
                     fi
                 fi
             done
             
-            if [ -n "$invalid_interfaces" ]; then
-                echo "服务启动失败: 以下接口不存在: $invalid_interfaces"
+            if [ $has_valid_interface -eq 0 ]; then
+                echo "服务启动失败: 没有有效的网络接口"
                 return 1
+            fi
+            
+            if [ -n "$invalid_interfaces" ]; then
+                echo "警告: 以下接口不存在: $invalid_interfaces"
+                # 继续启动，因为有其他有效接口
             fi
             
             # 创建必要的目录
@@ -245,11 +269,13 @@ get_current_internet_interface() {
         uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read section; do
             local enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
             local interface=$(uci get network_switcher.$section.interface 2>/dev/null)
-            local device=$(ubus call network.interface.$interface status 2>/dev/null | jsonfilter -e '@.l3_device' 2>/dev/null)
             
-            if [ "$enabled" = "1" ] && [ "$device" = "$default_iface" ]; then
-                echo "$interface"
-                return 0
+            if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
+                local device=$(ubus call network.interface.$interface status 2>/dev/null | jsonfilter -e '@.l3_device' 2>/dev/null)
+                if [ "$device" = "$default_iface" ]; then
+                    echo "$interface"
+                    return 0
+                fi
             fi
         done
     fi
@@ -463,20 +489,38 @@ switch_interface() {
     fi
 }
 
-# 自动切换（多接口支持）
+# 自动切换（多接口支持，优先使用主接口）
 auto_switch() {
     if [ "$ENABLED" != "1" ]; then
         return 0
     fi
     
-    # 获取所有启用的接口并按metric排序
+    # 首先检查主接口是否就绪
+    if [ -n "$PRIMARY_INTERFACE" ] && is_interface_ready_for_switch "$PRIMARY_INTERFACE"; then
+        local current_device=$(get_current_default_interface)
+        local primary_device=$(get_interface_device "$PRIMARY_INTERFACE")
+        
+        if [ "$current_device" != "$primary_device" ]; then
+            log "主接口就绪，切换到主接口: $PRIMARY_INTERFACE" "SWITCH"
+            switch_interface "$PRIMARY_INTERFACE" && return 0
+        elif ! test_network_connectivity "$PRIMARY_INTERFACE"; then
+            log "主接口网络异常，重新切换到主接口: $PRIMARY_INTERFACE" "SWITCH"
+            switch_interface "$PRIMARY_INTERFACE" && return 0
+        else
+            # 主接口正常，保持
+            return 0
+        fi
+    fi
+    
+    # 如果主接口不可用，按优先级顺序切换其他接口
     local sorted_interfaces=""
     uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read section; do
         local enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
         local interface=$(uci get network_switcher.$section.interface 2>/dev/null)
         local metric=$(uci get network_switcher.$section.metric 2>/dev/null || echo "999")
         
-        if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
+        # 跳过主接口，因为已经检查过了
+        if [ "$enabled" = "1" ] && [ -n "$interface" ] && [ "$interface" != "$PRIMARY_INTERFACE" ]; then
             echo "$metric:$interface"
         fi
     done | sort -n | cut -d: -f2 > /tmp/sorted_interfaces
@@ -516,11 +560,18 @@ show_status() {
     echo "=== 网络切换器状态 ==="
     echo "服务状态: $(service_control status)"
     echo "检查间隔: ${CHECK_INTERVAL}秒"
+    if [ -n "$PRIMARY_INTERFACE" ]; then
+        echo "主接口: $PRIMARY_INTERFACE"
+    fi
     echo ""
     
     # 当前互联网出口接口
     local internet_interface=$(get_current_internet_interface)
-    echo "当前互联网出口: $internet_interface"
+    if [ -n "$internet_interface" ]; then
+        echo "当前互联网出口: $internet_interface"
+    else
+        echo "当前互联网出口: -"
+    fi
     
     # 显示所有启用的接口状态
     echo -e "\n=== 接口状态 ==="
@@ -529,21 +580,26 @@ show_status() {
         local enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
         local interface=$(uci get network_switcher.$section.interface 2>/dev/null)
         local metric=$(uci get network_switcher.$section.metric 2>/dev/null || echo "999")
+        local primary=$(uci get network_switcher.$section.primary 2>/dev/null || echo "0")
         
         if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
             enabled_count=$((enabled_count + 1))
-            echo -e "\n--- $interface (优先级: $metric) ---"
+            echo -e "\n--- $interface (优先级: $metric)"
+            if [ "$primary" = "1" ]; then
+                echo "  主接口"
+            fi
+            
             local status=$(get_interface_status "$interface")
             local device=$(get_interface_device "$interface")
             local gateway=$(get_interface_gateway "$interface")
             local available=$(is_interface_available "$interface" && echo "✓ 可用" || echo "✗ 不可用")
             local ready=$(is_interface_ready_for_switch "$interface" && echo "✓ 就绪" || echo "✗ 未就绪")
             
-            echo "接口状态: $status"
-            echo "基本可用: $available"
-            echo "切换就绪: $ready"
-            echo "设备名: $device"
-            echo "网关: $gateway"
+            echo "  接口状态: $status"
+            echo "  基本可用: $available"
+            echo "  切换就绪: $ready"
+            echo "  设备名: $device"
+            echo "  网关: $gateway"
         fi
     done
     
@@ -662,6 +718,12 @@ get_configured_interfaces() {
     done
 }
 
+# 获取主接口
+get_primary_interface() {
+    read_uci_config
+    echo "$PRIMARY_INTERFACE"
+}
+
 # 主函数
 main() {
     acquire_lock
@@ -708,8 +770,11 @@ main() {
         current_interface)
             get_current_internet_interface
             ;;
+        primary_interface)
+            get_primary_interface
+            ;;
         *)
-            echo "网络切换器 - OpenWrt插件版 v1.1.1"
+            echo "网络切换器 - OpenWrt插件版 v1.2.0"
             echo ""
             echo "用法: $0 [命令]"
             echo ""
@@ -729,6 +794,7 @@ main() {
             echo "  interfaces   - 获取可用接口列表"
             echo "  configured_interfaces - 获取已配置接口列表"
             echo "  current_interface - 获取当前互联网出口接口"
+            echo "  primary_interface - 获取主接口"
             echo "  clear_log    - 清空日志"
             echo ""
             echo "配置: 通过LuCI界面或编辑 /etc/config/network_switcher"
