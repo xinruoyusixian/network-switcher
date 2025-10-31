@@ -9,7 +9,6 @@ s = m:section(TypedSection, "settings", "全局设置")
 s.anonymous = true
 s.addremove = false
 
--- 删除运行模式选项，只保留检查间隔
 check_interval = s:option(Value, "check_interval", "检查间隔(秒)", 
     "网络检查的时间间隔")
 check_interval.datatype = "uinteger"
@@ -19,10 +18,10 @@ check_interval.placeholder = "60"
 -- 网络测试设置
 s:option(DummyValue, "test_settings", "网络测试设置")
 
--- 使用DynamicList作为Ping目标
+-- 使用DynamicList作为Ping目标，设置默认值为三个独立的IP
 ping_targets = s:option(DynamicList, "ping_targets", "Ping目标", 
     "用于测试连通性的IP地址(每行一个，可点击+号添加)")
-ping_targets.default = "8.8.8.8 1.1.1.1 223.5.5.5"
+ping_targets.default = {"8.8.8.8", "1.1.1.1", "223.5.5.5"}
 ping_targets.placeholder = "8.8.8.8"
 
 -- 添加Ping成功次数选项
@@ -64,7 +63,7 @@ uci:foreach("network", "interface",
 
 -- 接口配置部分
 interfaces_s = m:section(TypedSection, "interface", "接口配置",
-    "配置网络接口用于切换。接口按优先级顺序使用(metric值越小优先级越高)。")
+    "配置网络接口用于切换。接口按优先级顺序使用(metric值越小优先级越高)。设置主接口用于自动切换的默认选择。")
 interfaces_s.anonymous = true
 interfaces_s.addremove = true
 interfaces_s.template = "cbi/tblsection"
@@ -81,6 +80,25 @@ metric = interfaces_s:option(Value, "metric", "优先级",
     "metric值越小优先级越高(1-999)")
 metric.datatype = "range(1,999)"
 metric.default = "10"
+
+-- 添加主接口选项
+primary = interfaces_s:option(Flag, "primary", "主接口", 
+    "设置为主接口，自动切换时优先使用")
+primary.default = "0"
+
+-- 处理主接口设置，确保只有一个主接口
+function primary.write(self, section, value)
+    -- 如果设置为1，先清除其他接口的主接口设置
+    if value == "1" then
+        uci:foreach("network_switcher", "interface", 
+            function(s)
+                if s[".name"] ~= section then
+                    uci:set("network_switcher", s[".name"], "primary", "0")
+                end
+            end)
+    end
+    Flag.write(self, section, value)
+end
 
 -- 定时任务配置
 schedule_s = m:section(TypedSection, "schedule", "定时任务设置",
