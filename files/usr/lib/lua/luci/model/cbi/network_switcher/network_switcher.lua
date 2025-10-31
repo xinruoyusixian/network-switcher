@@ -10,6 +10,9 @@ s = m:section(TypedSection, "settings", "全局设置")
 s.anonymous = true
 s.addremove = false
 
+enabled = s:option(Flag, "enabled", "启用服务", "启用网络切换服务")
+enabled.default = "0"
+
 check_interval = s:option(Value, "check_interval", "检查间隔(秒)", 
     "网络检查的时间间隔")
 check_interval.datatype = "uinteger"
