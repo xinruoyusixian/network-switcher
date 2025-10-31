@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # ==============================================
-# 网络切换脚本 - OpenWrt插件版（修正版）
+# 网络切换脚本 - OpenWrt插件版 v1.0.1
 # ==============================================
 
 # 环境设置
@@ -78,6 +78,13 @@ log() {
     esac
 }
 
+# 清空日志函数
+clear_log() {
+    > "$LOG_FILE"
+    log "日志已被清空" "SERVICE"
+    echo "日志清空成功"
+}
+
 acquire_lock() {
     if [ -f "$LOCK_FILE" ]; then
         local lock_pid=$(cat "$LOCK_FILE" 2>/dev/null)
@@ -105,11 +112,15 @@ service_control() {
                 fi
             fi
             
+            # 创建必要的目录
+            mkdir -p /var/lock /var/log /var/state /var/run
+            
             log "启动网络切换服务" "SERVICE"
-            /usr/bin/network_switcher daemon >/dev/null 2>&1 &
+            # 使用nohup在后台运行守护进程
+            nohup /usr/bin/network_switcher daemon >/dev/null 2>&1 &
             local pid=$!
             echo $pid > "$PID_FILE"
-            sleep 1
+            sleep 2
             if [ -d "/proc/$pid" ]; then
                 echo "服务启动成功 (PID: $pid)"
                 return 0
@@ -122,7 +133,11 @@ service_control() {
             if [ -f "$PID_FILE" ]; then
                 local pid=$(cat "$PID_FILE")
                 if [ -d "/proc/$pid" ]; then
-                    kill $pid
+                    kill $pid 2>/dev/null
+                    sleep 1
+                    if [ -d "/proc/$pid" ]; then
+                        kill -9 $pid 2>/dev/null
+                    fi
                     log "停止网络切换服务" "SERVICE"
                     echo "服务停止成功"
                 else
@@ -130,7 +145,16 @@ service_control() {
                 fi
                 rm -f "$PID_FILE"
             else
-                echo "服务未运行"
+                # 如果没有PID文件，尝试通过进程名停止
+                local pids=$(pgrep -f "network_switcher daemon" 2>/dev/null)
+                if [ -n "$pids" ]; then
+                    for pid in $pids; do
+                        kill $pid 2>/dev/null
+                    done
+                    echo "服务停止成功"
+                else
+                    echo "服务未运行"
+                fi
             fi
             ;;
         "restart")
@@ -149,8 +173,14 @@ service_control() {
                     return 1
                 fi
             else
-                echo "已停止"
-                return 1
+                # 检查是否有相关进程在运行
+                if pgrep -f "network_switcher daemon" >/dev/null 2>&1; then
+                    echo "运行中"
+                    return 0
+                else
+                    echo "已停止"
+                    return 1
+                fi
             fi
             ;;
     esac
@@ -486,6 +516,7 @@ test_connectivity() {
 run_daemon() {
     DAEMON_MODE=1
     log "启动网络切换守护进程" "SERVICE"
+    echo $$ > "$PID_FILE"
     
     while true; do
         # 重新读取配置
@@ -496,6 +527,10 @@ run_daemon() {
             if [ "$OPERATION_MODE" = "auto" ]; then
                 auto_switch
             fi
+        else
+            # 如果服务被禁用，退出守护进程
+            log "服务已禁用，停止守护进程" "SERVICE"
+            break
         fi
         
         sleep "$CHECK_INTERVAL"
@@ -506,9 +541,10 @@ run_daemon() {
 get_available_interfaces() {
     echo "wan"
     echo "wwan"
+    echo "auto"
     # 从网络配置中获取更多接口
     uci show network | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read iface; do
-        if [ "$iface" != "wan" ] && [ "$iface" != "wwan" ] && [ "$iface" != "loopback" ]; then
+        if [ "$iface" != "wan" ] && [ "$iface" != "wwan" ] && [ "$iface" != "loopback" ] && [ "$iface" != "auto" ]; then
             echo "$iface"
         fi
     done
@@ -557,8 +593,11 @@ main() {
         interfaces)
             get_available_interfaces
             ;;
+        clear_log)
+            clear_log
+            ;;
         *)
-            echo "网络切换器 - OpenWrt插件版"
+            echo "网络切换器 - OpenWrt插件版 v1.0.1"
             echo ""
             echo "用法: $0 [命令]"
             echo ""
@@ -576,6 +615,7 @@ main() {
             echo "其他:"
             echo "  daemon       - 守护进程模式"
             echo "  interfaces   - 获取可用接口列表"
+            echo "  clear_log    - 清空日志"
             echo ""
             echo "配置: 通过LuCI界面或编辑 /etc/config/network_switcher"
             ;;
