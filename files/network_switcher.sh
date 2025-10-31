@@ -17,10 +17,10 @@ cd /tmp
 CONFIG_FILE="/etc/config/network_switcher"
 DAEMON_MODE=0
 
-# 从UCI读取配置 - 修复版本
+# 从UCI读取配置 - 完全重写版本
 read_uci_config() {
     # 基本设置
-    ENABLED=$(uci get network_switcher.settings.enabled 2>/dev/null || echo "0")
+    ENABLED=$(uci get network_switcher.settings.enabled 2>/dev/null || echo "1")
     CHECK_INTERVAL=$(uci get network_switcher.settings.check_interval 2>/dev/null || echo "60")
     PING_COUNT=$(uci get network_switcher.settings.ping_count 2>/dev/null || echo "3")
     PING_TIMEOUT=$(uci get network_switcher.settings.ping_timeout 2>/dev/null || echo "3")
@@ -29,48 +29,40 @@ read_uci_config() {
     
     # 读取Ping目标列表
     PING_TARGETS=""
-    local target_index=1
+    local index=0
     while true; do
-        local target=$(uci get network_switcher.settings.ping_targets 2>/dev/null | awk -v i=$target_index '{print $i}')
+        local target=$(uci get network_switcher.@settings[0].ping_targets[$index] 2>/dev/null)
         [ -z "$target" ] && break
         PING_TARGETS="$PING_TARGETS $target"
-        target_index=$((target_index + 1))
+        index=$((index + 1))
     done
     # 如果没有配置目标，使用默认值
     if [ -z "$PING_TARGETS" ]; then
         PING_TARGETS="8.8.8.8 1.1.1.1 223.5.5.5"
     fi
     
-    # 读取接口配置
+    # 读取接口配置 - 完全重写
     INTERFACES=""
     INTERFACE_COUNT=0
     PRIMARY_INTERFACE=""
     
-    # 使用临时文件来收集接口信息
-    local temp_file=$(mktemp)
+    # 获取所有接口配置段
+    local interface_sections=$(uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1)
     
-    uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read section; do
-        if [ "$section" != "settings" ] && [ "$section" != "schedule" ]; then
-            local enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
-            local interface=$(uci get network_switcher.$section.interface 2>/dev/null)
-            local primary=$(uci get network_switcher.$section.primary 2>/dev/null || echo "0")
+    for section in $interface_sections; do
+        local enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
+        local interface=$(uci get network_switcher.$section.interface 2>/dev/null)
+        local primary=$(uci get network_switcher.$section.primary 2>/dev/null || echo "0")
+        
+        if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
+            INTERFACE_COUNT=$((INTERFACE_COUNT + 1))
+            INTERFACES="$INTERFACES $interface"
             
-            if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
-                echo "INTERFACE_COUNT=$((INTERFACE_COUNT + 1))" >> "$temp_file"
-                echo "INTERFACES=\"$INTERFACES $interface\"" >> "$temp_file"
-                
-                if [ "$primary" = "1" ]; then
-                    echo "PRIMARY_INTERFACE=\"$interface\"" >> "$temp_file"
-                fi
+            if [ "$primary" = "1" ]; then
+                PRIMARY_INTERFACE="$interface"
             fi
         fi
     done
-    
-    # 从临时文件读取变量
-    if [ -f "$temp_file" ]; then
-        source "$temp_file"
-        rm -f "$temp_file"
-    fi
     
     # 如果没有设置主接口，使用第一个启用的接口
     if [ -z "$PRIMARY_INTERFACE" ] && [ $INTERFACE_COUNT -gt 0 ]; then
@@ -134,23 +126,9 @@ release_lock() {
 
 # 检查接口配置是否有效
 check_interface_config() {
-    local enabled_count=0
-    local temp_file=$(mktemp)
+    read_uci_config
     
-    uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read section; do
-        local enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
-        local interface=$(uci get network_switcher.$section.interface 2>/dev/null)
-        if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
-            echo "enabled_count=$((enabled_count + 1))" >> "$temp_file"
-        fi
-    done
-    
-    if [ -f "$temp_file" ]; then
-        source "$temp_file"
-        rm -f "$temp_file"
-    fi
-    
-    if [ $enabled_count -lt 1 ]; then
+    if [ $INTERFACE_COUNT -lt 1 ]; then
         echo "错误: 未配置任何有效的网络接口"
         return 1
     fi
@@ -178,6 +156,7 @@ service_control() {
             # 重新读取配置
             read_uci_config
             echo "配置读取完成: ENABLED=$ENABLED, 接口数量=$INTERFACE_COUNT"
+            echo "已配置接口: $INTERFACES"
             
             if [ -f "$PID_FILE" ]; then
                 local pid=$(cat "$PID_FILE")
@@ -196,26 +175,16 @@ service_control() {
             # 验证所有启用的接口是否存在
             local invalid_interfaces=""
             local has_valid_interface=0
-            local temp_file=$(mktemp)
             
-            uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read section; do
-                local enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
-                local interface=$(uci get network_switcher.$section.interface 2>/dev/null)
-                if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
-                    if validate_interface "$interface"; then
-                        echo "has_valid_interface=1" >> "$temp_file"
-                        echo "接口 $interface 验证通过"
-                    else
-                        echo "invalid_interfaces=\"$invalid_interfaces $interface\"" >> "$temp_file"
-                        echo "接口 $interface 验证失败"
-                    fi
+            for interface in $INTERFACES; do
+                if validate_interface "$interface"; then
+                    has_valid_interface=1
+                    echo "接口 $interface 验证通过"
+                else
+                    invalid_interfaces="$invalid_interfaces $interface"
+                    echo "接口 $interface 验证失败"
                 fi
             done
-            
-            if [ -f "$temp_file" ]; then
-                source "$temp_file"
-                rm -f "$temp_file"
-            fi
             
             if [ $has_valid_interface -eq 0 ]; then
                 echo "服务启动失败: 没有有效的网络接口"
@@ -315,27 +284,13 @@ get_current_internet_interface() {
     
     if [ -n "$default_iface" ]; then
         # 尝试通过接口找到对应的逻辑接口名
-        local temp_file=$(mktemp)
-        
-        uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read section; do
-            local enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
-            local interface=$(uci get network_switcher.$section.interface 2>/dev/null)
-            
-            if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
-                local device=$(ubus call network.interface.$interface status 2>/dev/null | jsonfilter -e '@.l3_device' 2>/dev/null)
-                if [ "$device" = "$default_iface" ]; then
-                    echo "$interface" > "$temp_file"
-                    break
-                fi
+        for interface in $INTERFACES; do
+            local device=$(ubus call network.interface.$interface status 2>/dev/null | jsonfilter -e '@.l3_device' 2>/dev/null)
+            if [ "$device" = "$default_iface" ]; then
+                echo "$interface"
+                return 0
             fi
         done
-        
-        if [ -f "$temp_file" ]; then
-            local result=$(cat "$temp_file")
-            rm -f "$temp_file"
-            echo "$result"
-            return 0
-        fi
     fi
     
     # 如果没找到，返回设备名
@@ -462,21 +417,15 @@ perform_route_switch() {
     
     # 获取该接口的metric
     local metric="10"
-    local temp_file=$(mktemp)
+    local interface_sections=$(uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1)
     
-    uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read section; do
+    for section in $interface_sections; do
         local iface=$(uci get network_switcher.$section.interface 2>/dev/null)
         if [ "$iface" = "$target_interface" ]; then
             metric=$(uci get network_switcher.$section.metric 2>/dev/null || echo "10")
-            echo "$metric" > "$temp_file"
             break
         fi
     done
-    
-    if [ -f "$temp_file" ]; then
-        metric=$(cat "$temp_file")
-        rm -f "$temp_file"
-    fi
     
     ip route replace default via "$gateway" dev "$device" metric "$metric"
     
@@ -573,29 +522,9 @@ auto_switch() {
     fi
     
     # 如果主接口不可用，按优先级顺序切换其他接口
-    local sorted_interfaces=""
-    local temp_file=$(mktemp)
-    
-    uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read section; do
-        local enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
-        local interface=$(uci get network_switcher.$section.interface 2>/dev/null)
-        local metric=$(uci get network_switcher.$section.metric 2>/dev/null || echo "999")
-        
-        # 跳过主接口，因为已经检查过了
-        if [ "$enabled" = "1" ] && [ -n "$interface" ] && [ "$interface" != "$PRIMARY_INTERFACE" ]; then
-            echo "$metric:$interface" >> "$temp_file"
-        fi
-    done
-    
-    if [ -f "$temp_file" ]; then
-        sort -n "$temp_file" | cut -d: -f2 > "${temp_file}_sorted"
-        sorted_interfaces=$(cat "${temp_file}_sorted" 2>/dev/null | tr '\n' ' ')
-        rm -f "$temp_file" "${temp_file}_sorted"
-    fi
-    
-    # 尝试按优先级顺序切换
-    for interface in $sorted_interfaces; do
-        if is_interface_ready_for_switch "$interface"; then
+    # 这里简化处理，按配置顺序尝试
+    for interface in $INTERFACES; do
+        if [ "$interface" != "$PRIMARY_INTERFACE" ] && is_interface_ready_for_switch "$interface"; then
             local current_device=$(get_current_default_interface)
             local target_device=$(get_interface_device "$interface")
             
@@ -638,21 +567,12 @@ show_status() {
     
     # 显示所有启用的接口状态
     echo -e "\n=== 接口状态 ==="
-    local enabled_count=0
-    local temp_file=$(mktemp)
     
-    uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read section; do
-        local enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
-        local interface=$(uci get network_switcher.$section.interface 2>/dev/null)
-        local metric=$(uci get network_switcher.$section.metric 2>/dev/null || echo "999")
-        local primary=$(uci get network_switcher.$section.primary 2>/dev/null || echo "0")
-        
-        if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
-            echo "enabled_count=$((enabled_count + 1))" >> "$temp_file"
-            echo -e "\n--- $interface (优先级: $metric)" >> "$temp_file"
-            if [ "$primary" = "1" ]; then
-                echo "  主接口" >> "$temp_file"
-            fi
+    if [ $INTERFACE_COUNT -eq 0 ]; then
+        echo "⚠️ 未配置任何有效的网络接口"
+    else
+        for interface in $INTERFACES; do
+            echo -e "\n--- $interface"
             
             local status=$(get_interface_status "$interface")
             local device=$(get_interface_device "$interface")
@@ -660,22 +580,12 @@ show_status() {
             local available=$(is_interface_available "$interface" && echo "✓ 可用" || echo "✗ 不可用")
             local ready=$(is_interface_ready_for_switch "$interface" && echo "✓ 就绪" || echo "✗ 未就绪")
             
-            echo "  接口状态: $status" >> "$temp_file"
-            echo "  基本可用: $available" >> "$temp_file"
-            echo "  切换就绪: $ready" >> "$temp_file"
-            echo "  设备名: $device" >> "$temp_file"
-            echo "  网关: $gateway" >> "$temp_file"
-        fi
-    done
-    
-    if [ -f "$temp_file" ]; then
-        source "$temp_file" 2>/dev/null
-        cat "$temp_file"
-        rm -f "$temp_file"
-    fi
-    
-    if [ $enabled_count -eq 0 ]; then
-        echo "⚠️ 未配置任何有效的网络接口"
+            echo "  接口状态: $status"
+            echo "  基本可用: $available"
+            echo "  切换就绪: $ready"
+            echo "  设备名: $device"
+            echo "  网关: $gateway"
+        done
     fi
     
     # 显示状态文件
@@ -693,63 +603,49 @@ test_connectivity() {
     echo "成功要求: $PING_SUCCESS_COUNT/$PING_COUNT"
     echo ""
     
-    local has_enabled_interfaces=0
-    local temp_file=$(mktemp)
-    
-    uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read section; do
-        local enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
-        local interface=$(uci get network_switcher.$section.interface 2>/dev/null)
-        
-        if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
-            echo "has_enabled_interfaces=1" >> "$temp_file"
-            echo "测试接口: $interface" >> "$temp_file"
-            local device=$(get_interface_device "$interface")
-            if [ -z "$device" ]; then
-                echo "  ✗ 无法获取设备名" >> "$temp_file"
-                continue
-            fi
-            
-            echo "  设备: $device" >> "$temp_file"
-            echo "  基本状态: $(is_interface_available "$interface" && echo "✓ 可用" || echo "✗ 不可用")" >> "$temp_file"
-            
-            if is_interface_available "$interface"; then
-                echo "  连通性测试:" >> "$temp_file"
-                local success_count=0
-                for target in $PING_TARGETS; do
-                    echo -n "    测试 $target ... " >> "$temp_file"
-                    if ping -I "$device" -c $PING_COUNT -W $PING_TIMEOUT "$target" >/dev/null 2>&1; then
-                        echo "✓ 成功" >> "$temp_file"
-                        success_count=$((success_count + 1))
-                    else
-                        echo "✗ 失败" >> "$temp_file"
-                    fi
-                done
-                
-                local target_count=$(echo "$PING_TARGETS" | wc -w)
-                local required_success=$PING_SUCCESS_COUNT
-                if [ $required_success -gt $target_count ]; then
-                    required_success=$target_count
-                fi
-                
-                if [ $success_count -ge $required_success ]; then
-                    echo "  总体结果: ✓ 通过 ($success_count/$required_success)" >> "$temp_file"
-                else
-                    echo "  总体结果: ✗ 失败 ($success_count/$required_success)" >> "$temp_file"
-                fi
-            fi
-            echo "" >> "$temp_file"
-        fi
-    done
-    
-    if [ -f "$temp_file" ]; then
-        source "$temp_file" 2>/dev/null
-        cat "$temp_file"
-        rm -f "$temp_file"
-    fi
-    
-    if [ $has_enabled_interfaces -eq 0 ]; then
+    if [ $INTERFACE_COUNT -eq 0 ]; then
         echo "⚠️ 未配置任何有效的网络接口，无法进行测试"
+        return
     fi
+    
+    for interface in $INTERFACES; do
+        echo "测试接口: $interface"
+        local device=$(get_interface_device "$interface")
+        if [ -z "$device" ]; then
+            echo "  ✗ 无法获取设备名"
+            continue
+        fi
+        
+        echo "  设备: $device"
+        echo "  基本状态: $(is_interface_available "$interface" && echo "✓ 可用" || echo "✗ 不可用")"
+        
+        if is_interface_available "$interface"; then
+            echo "  连通性测试:"
+            local success_count=0
+            for target in $PING_TARGETS; do
+                echo -n "    测试 $target ... "
+                if ping -I "$device" -c $PING_COUNT -W $PING_TIMEOUT "$target" >/dev/null 2>&1; then
+                    echo "✓ 成功"
+                    success_count=$((success_count + 1))
+                else
+                    echo "✗ 失败"
+                fi
+            done
+            
+            local target_count=$(echo "$PING_TARGETS" | wc -w)
+            local required_success=$PING_SUCCESS_COUNT
+            if [ $required_success -gt $target_count ]; then
+                required_success=$target_count
+            fi
+            
+            if [ $success_count -ge $required_success ]; then
+                echo "  总体结果: ✓ 通过 ($success_count/$required_success)"
+            else
+                echo "  总体结果: ✗ 失败 ($success_count/$required_success)"
+            fi
+        fi
+        echo ""
+    done
 }
 
 # 守护进程模式
@@ -775,33 +671,12 @@ run_daemon() {
     done
 }
 
-# 获取可用接口列表
-get_available_interfaces() {
-    echo "wan"
-    # 从网络配置中获取更多接口
-    uci show network | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read iface; do
-        if [ "$iface" != "wan" ] && [ "$iface" != "loopback" ]; then
-            echo "$iface"
-        fi
-    done
-}
-
-# 获取已配置的接口列表 - 修复版本
+# 获取已配置的接口列表
 get_configured_interfaces() {
-    local temp_file=$(mktemp)
-    
-    uci show network_switcher 2>/dev/null | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read section; do
-        local enabled=$(uci get network_switcher.$section.enabled 2>/dev/null || echo "0")
-        local interface=$(uci get network_switcher.$section.interface 2>/dev/null)
-        if [ "$enabled" = "1" ] && [ -n "$interface" ]; then
-            echo "$interface" >> "$temp_file"
-        fi
+    read_uci_config
+    for interface in $INTERFACES; do
+        echo "$interface"
     done
-    
-    if [ -f "$temp_file" ]; then
-        cat "$temp_file"
-        rm -f "$temp_file"
-    fi
 }
 
 # 获取主接口
@@ -845,7 +720,12 @@ main() {
             test_connectivity
             ;;
         interfaces)
-            get_available_interfaces
+            # 获取系统所有接口
+            uci show network | grep "=interface" | cut -d'.' -f2 | cut -d'=' -f1 | while read iface; do
+                if [ "$iface" != "loopback" ]; then
+                    echo "$iface"
+                fi
+            done
             ;;
         configured_interfaces)
             get_configured_interfaces
