@@ -164,9 +164,22 @@ function action_get_configured_interfaces()
     local interface_list = {}
     
     for line in interfaces:gmatch("[^\r\n]+") do
-        if line ~= "" then
+        if line ~= "" and line ~= "wan" then  -- 过滤掉空行和重复的wan
             table.insert(interface_list, line)
         end
+    end
+    
+    -- 确保至少包含wan接口
+    local has_wan = false
+    for _, iface in ipairs(interface_list) do
+        if iface == "wan" then
+            has_wan = true
+            break
+        end
+    end
+    
+    if not has_wan then
+        table.insert(interface_list, 1, "wan")
     end
     
     lucihttp.prepare_content("application/json")
