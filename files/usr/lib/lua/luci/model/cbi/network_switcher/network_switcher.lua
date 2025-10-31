@@ -11,7 +11,7 @@ s.anonymous = true
 s.addremove = false
 
 enabled = s:option(Flag, "enabled", "启用服务", "启用网络切换服务")
-enabled.default = "0"
+enabled.default = "1"
 
 check_interval = s:option(Value, "check_interval", "检查间隔(秒)", 
     "网络检查的时间间隔")
@@ -20,15 +20,11 @@ check_interval.default = "60"
 check_interval.placeholder = "60"
 
 -- 网络测试设置
-s:option(DummyValue, "test_settings", "网络测试设置")
-
--- 使用DynamicList作为Ping目标
 ping_targets = s:option(DynamicList, "ping_targets", "Ping目标", 
     "用于测试连通性的IP地址(每行一个，可点击+号添加)")
 ping_targets.default = {"8.8.8.8", "1.1.1.1", "223.5.5.5"}
 ping_targets.placeholder = "8.8.8.8"
 
--- 添加Ping成功次数选项
 ping_success_count = s:option(Value, "ping_success_count", "Ping成功次数", 
     "需要成功Ping通的目标数量才认为网络正常(默认1)")
 ping_success_count.datatype = "uinteger"
@@ -53,20 +49,8 @@ switch_wait_time.datatype = "range(1,10)"
 switch_wait_time.default = "3"
 switch_wait_time.placeholder = "3"
 
--- 获取可用接口 - 从网络配置动态获取
-local interface_list = {}
-uci:foreach("network", "interface",
-    function(section)
-        if section[".name"] ~= "loopback" then
-            table.insert(interface_list, section[".name"])
-        end
-    end
-)
-
--- 如果没有任何接口，至少包含wan
-if #interface_list == 0 then
-    table.insert(interface_list, "wan")
-end
+-- 获取可用接口
+local interface_list = {"wan", "wwan"}
 
 -- 接口配置部分
 interfaces_s = m:section(TypedSection, "interface", "接口配置",
@@ -88,14 +72,12 @@ metric = interfaces_s:option(Value, "metric", "优先级",
 metric.datatype = "range(1,999)"
 metric.default = "10"
 
--- 添加主接口选项
 primary = interfaces_s:option(Flag, "primary", "主接口", 
     "设置为主接口，自动切换时优先使用")
 primary.default = "0"
 
--- 处理主接口设置，确保只有一个主接口
+-- 处理主接口设置
 function primary.write(self, section, value)
-    -- 如果设置为1，先清除其他接口的主接口设置
     if value == "1" then
         uci:foreach("network_switcher", "interface", 
             function(s)
@@ -122,7 +104,6 @@ schedule_times = schedule_s:option(DynamicList, "times", "定时时间",
 schedule_times.default = "08:00"
 schedule_times.placeholder = "08:00"
 
--- 获取目标接口列表（包括auto选项）
 local target_list = {"auto"}
 for _, iface in ipairs(interface_list) do
     table.insert(target_list, iface)
@@ -134,28 +115,6 @@ schedule_targets.default = "auto"
 schedule_targets.placeholder = "auto"
 for _, target in ipairs(target_list) do
     schedule_targets:value(target, target)
-end
-
--- 初始化默认接口配置
-function m.on_after_commit(self)
-    -- 检查是否已经有接口配置
-    local has_interfaces = false
-    uci:foreach("network_switcher", "interface",
-        function(section)
-            has_interfaces = true
-        end
-    )
-    
-    -- 如果没有接口配置，创建默认的wan接口
-    if not has_interfaces then
-        uci:section("network_switcher", "interface", "wan", {
-            enabled = "1",
-            interface = "wan",
-            metric = "10",
-            primary = "1"
-        })
-        uci:commit("network_switcher")
-    end
 end
 
 return m
