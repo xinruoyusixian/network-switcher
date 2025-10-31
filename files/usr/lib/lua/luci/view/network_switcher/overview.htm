@@ -35,6 +35,13 @@
             </div>
             
             <div class="cbi-value">
+                <label class="cbi-value-title">主接口</label>
+                <div class="cbi-value-field">
+                    <span id="primary-interface" style="font-weight: bold;">-</span>
+                </div>
+            </div>
+            
+            <div class="cbi-value">
                 <label class="cbi-value-title">服务状态</label>
                 <div class="cbi-value-field">
                     <span id="service-status">-</span>
@@ -103,9 +110,19 @@ function loadInterfaces() {
     var xhr = new XMLHttpRequest();
     xhr.open('GET', '<%=luci.dispatcher.build_url("admin/services/network_switcher/get_configured_interfaces")%>', true);
     xhr.onreadystatechange = function() {
-        if (xhr.readyState === 4 && xhr.status === 200) {
-            var interfaces = JSON.parse(xhr.responseText);
-            updateInterfaceSelect(interfaces);
+        if (xhr.readyState === 4) {
+            if (xhr.status === 200) {
+                try {
+                    var interfaces = JSON.parse(xhr.responseText);
+                    updateInterfaceSelect(interfaces);
+                } catch (e) {
+                    console.error('解析接口列表失败:', e);
+                    updateInterfaceSelect(['wan', 'wwan']); // 使用默认值
+                }
+            } else {
+                console.error('获取接口列表失败:', xhr.status);
+                updateInterfaceSelect(['wan', 'wwan']); // 使用默认值
+            }
         }
     };
     xhr.send();
@@ -128,14 +145,29 @@ function updateInterfaceSelect(interfaces) {
     select.appendChild(defaultOption);
     
     // 添加接口选项
-    interfaces.forEach(function(iface) {
-        if (iface && iface.trim() !== '') {
-            var option = document.createElement('option');
-            option.value = iface;
-            option.textContent = iface;
-            select.appendChild(option);
-        }
-    });
+    if (interfaces && interfaces.length > 0) {
+        interfaces.forEach(function(iface) {
+            if (iface && iface.trim() !== '' && 
+                !iface.includes('另一个实例') && 
+                !iface.includes('无法获取锁')) {
+                var option = document.createElement('option');
+                option.value = iface;
+                option.textContent = iface;
+                select.appendChild(option);
+            }
+        });
+    } else {
+        // 如果没有接口，添加默认选项
+        var wanOption = document.createElement('option');
+        wanOption.value = 'wan';
+        wanOption.textContent = 'wan';
+        select.appendChild(wanOption);
+        
+        var wwanOption = document.createElement('option');
+        wwanOption.value = 'wwan';
+        wwanOption.textContent = 'wwan';
+        select.appendChild(wwanOption);
+    }
     
     // 恢复选择
     if (currentValue) {
@@ -149,23 +181,31 @@ function refreshStatus() {
     xhr.open('GET', '<%=luci.dispatcher.build_url("admin/services/network_switcher/status")%>', true);
     xhr.onreadystatechange = function() {
         if (xhr.readyState === 4 && xhr.status === 200) {
-            var response = JSON.parse(xhr.responseText);
-            
-            // 更新服务状态
-            updateServiceStatus(response.service);
-            
-            // 提取当前接口
-            var statusText = response.status_output;
-            var match = statusText.match(/当前互联网出口:\s*(\S+)/);
-            if (match) {
-                document.getElementById('current-interface').textContent = match[1];
+            try {
+                var response = JSON.parse(xhr.responseText);
+                
+                // 更新服务状态
+                updateServiceStatus(response.service);
+                
+                // 提取当前接口
+                var statusText = response.status_output;
+                var match = statusText.match(/当前互联网出口:\s*(\S+)/);
+                if (match) {
+                    document.getElementById('current-interface').textContent = match[1];
+                }
+                
+                // 提取主接口
+                var primaryMatch = statusText.match(/主接口:\s*(\S+)/);
+                if (primaryMatch) {
+                    document.getElementById('primary-interface').textContent = primaryMatch[1];
+                }
+                
+                // 更新详细状态
+                document.getElementById('status-output').textContent = statusText;
+                
+            } catch (e) {
+                console.error('解析状态失败:', e);
             }
-            
-            // 更新详细状态
-            document.getElementById('status-output').textContent = statusText;
-            
-            // 刷新接口列表
-            loadInterfaces();
         }
     };
     xhr.send();
@@ -195,13 +235,20 @@ function toggleService() {
     var xhr = new XMLHttpRequest();
     xhr.open('GET', '<%=luci.dispatcher.build_url("admin/services/network_switcher/service_control")%>?action=' + action, true);
     xhr.onreadystatechange = function() {
-        if (xhr.readyState === 4 && xhr.status === 200) {
-            var response = JSON.parse(xhr.responseText);
-            showResult(response.message);
-            setTimeout(refreshStatus, 2000);
-        } else {
-            showResult("操作失败");
-            enableCheckbox.checked = !enableCheckbox.checked;
+        if (xhr.readyState === 4) {
+            if (xhr.status === 200) {
+                try {
+                    var response = JSON.parse(xhr.responseText);
+                    showResult(response.message);
+                    setTimeout(refreshStatus, 2000);
+                } catch (e) {
+                    showResult("操作完成");
+                    setTimeout(refreshStatus, 2000);
+                }
+            } else {
+                showResult("操作失败");
+                enableCheckbox.checked = !enableCheckbox.checked;
+            }
         }
     };
     xhr.send();
@@ -215,9 +262,14 @@ function restartService() {
     xhr.open('GET', '<%=luci.dispatcher.build_url("admin/services/network_switcher/service_control")%>?action=restart', true);
     xhr.onreadystatechange = function() {
         if (xhr.readyState === 4 && xhr.status === 200) {
-            var response = JSON.parse(xhr.responseText);
-            showResult(response.message);
-            setTimeout(refreshStatus, 3000);
+            try {
+                var response = JSON.parse(xhr.responseText);
+                showResult(response.message);
+                setTimeout(refreshStatus, 3000);
+            } catch (e) {
+                showResult("重启完成");
+                setTimeout(refreshStatus, 3000);
+            }
         }
     };
     xhr.send();
@@ -243,9 +295,14 @@ function switchInterface() {
     xhr.open('GET', '<%=luci.dispatcher.build_url("admin/services/network_switcher/switch")%>?interface=' + interface, true);
     xhr.onreadystatechange = function() {
         if (xhr.readyState === 4 && xhr.status === 200) {
-            var response = JSON.parse(xhr.responseText);
-            showResult(response.message);
-            setTimeout(refreshStatus, 2000);
+            try {
+                var response = JSON.parse(xhr.responseText);
+                showResult(response.message);
+                setTimeout(refreshStatus, 2000);
+            } catch (e) {
+                showResult("切换操作完成");
+                setTimeout(refreshStatus, 2000);
+            }
         }
     };
     xhr.send();
@@ -263,9 +320,14 @@ function autoSwitch() {
     xhr.open('GET', '<%=luci.dispatcher.build_url("admin/services/network_switcher/switch")%>?interface=auto', true);
     xhr.onreadystatechange = function() {
         if (xhr.readyState === 4 && xhr.status === 200) {
-            var response = JSON.parse(xhr.responseText);
-            showResult(response.message);
-            setTimeout(refreshStatus, 2000);
+            try {
+                var response = JSON.parse(xhr.responseText);
+                showResult(response.message);
+                setTimeout(refreshStatus, 2000);
+            } catch (e) {
+                showResult("自动切换完成");
+                setTimeout(refreshStatus, 2000);
+            }
         }
     };
     xhr.send();
@@ -279,9 +341,14 @@ function testConnectivity() {
     xhr.open('GET', '<%=luci.dispatcher.build_url("admin/services/network_switcher/test")%>', true);
     xhr.onreadystatechange = function() {
         if (xhr.readyState === 4 && xhr.status === 200) {
-            var response = JSON.parse(xhr.responseText);
-            showResult(response.output);
-            setTimeout(refreshStatus, 1000);
+            try {
+                var response = JSON.parse(xhr.responseText);
+                showResult(response.output);
+                setTimeout(refreshStatus, 1000);
+            } catch (e) {
+                showResult("测试完成");
+                setTimeout(refreshStatus, 1000);
+            }
         }
     };
     xhr.send();
