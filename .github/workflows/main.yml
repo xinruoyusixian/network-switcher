@@ -15,7 +15,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04  # 使用特定版本而不是最新版
     strategy:
       matrix:
         target: [x86-64, aarch64_generic]
@@ -45,14 +45,17 @@ jobs:
           wget \
           unzip \
           python3 \
-          python3-distutils
+          python3-pip
+        # python3-distutils 在 Ubuntu 22.04 中已包含在 python3 中
 
     - name: Download and extract SDK
       run: |
         mkdir -p sdk
         cd sdk
-        wget ${{ matrix.sdk_url }}
+        echo "Downloading SDK for ${{ matrix.target }}..."
+        wget -q ${{ matrix.sdk_url }}
         tar -xf *.tar.xz --strip-components=1
+        echo "SDK extracted successfully"
         cd ..
 
     - name: Prepare package directory in SDK
@@ -72,20 +75,26 @@ jobs:
     - name: Configure package selection
       run: |
         cd sdk
-        echo "CONFIG_TARGET_${{ matrix.target }}=y" > .config
-        echo "CONFIG_PACKAGE_${{ env.PACKAGE_NAME }}=m" >> .config
+        # 创建基本配置
+        cat > .config << 'EOF'
+CONFIG_TARGET_${{ matrix.target }}=y
+CONFIG_PACKAGE_${{ env.PACKAGE_NAME }}=m
+EOF
 
     - name: Build package
       run: |
         cd sdk
         make defconfig
         echo "Starting package compilation..."
-        make package/${{ env.PACKAGE_NAME }}/compile -j$(nproc) V=sc
+        make package/${{ env.PACKAGE_NAME }}/compile -j$(nproc) V=s
 
     - name: Collect artifacts
       run: |
         mkdir -p artifacts/${{ matrix.target }}
-        find sdk/bin -name "*${{ env.PACKAGE_NAME }}*.ipk" -exec cp {} artifacts/${{ matrix.target }} \;
+        # 查找所有IPK文件
+        find sdk/bin -name "*.ipk" | grep "${{ env.PACKAGE_NAME }}" | head -5 | while read ipk; do
+          cp "$ipk" artifacts/${{ matrix.target }}/
+        done
         echo "=== Built IPK files ==="
         ls -la artifacts/${{ matrix.target }}/
 
@@ -98,7 +107,7 @@ jobs:
 
   release:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     if: github.event_name == 'release'
     
     steps:
@@ -107,23 +116,31 @@ jobs:
       with:
         path: dist
 
-    - name: Display structure
-      run: ls -R dist
-
     - name: Create release package
       run: |
         mkdir -p release_packages
+        # 收集所有IPK文件
         find dist -name "*.ipk" -exec cp {} release_packages/ \;
-        cd release_packages
-        echo "Network Switcher Plugin - Built Packages" > PACKAGES.txt
-        echo "Version: ${{ env.PACKAGE_VERSION }}" >> PACKAGES.txt
-        echo "Build Date: $(date)" >> PACKAGES.txt
-        echo "" >> PACKAGES.txt
-        echo "Available packages:" >> PACKAGES.txt
-        for ipk in *.ipk; do
-          echo "- $ipk" >> PACKAGES.txt
-        done
-        cd ..
+        
+        # 创建包说明文件
+        cat > release_packages/README.txt << 'EOF'
+Network Switcher Plugin for OpenWrt/ImmortalWrt
+
+This package provides intelligent network interface switching with LuCI web interface.
+
+Installation:
+1. Upload the appropriate IPK file for your device architecture
+2. Install using: opkg install <package-name>.ipk
+3. Access via LuCI: Services -> Network Switcher
+
+Supported architectures:
+- x86-64: For x86 64-bit devices
+- aarch64_generic: For ARM 64-bit devices
+
+For issues and documentation, visit the project repository.
+EOF
+
+        # 创建zip包
         zip -r ${{ env.PACKAGE_NAME }}-${{ github.event.release.tag_name }}.zip release_packages/
 
     - name: Upload to release
