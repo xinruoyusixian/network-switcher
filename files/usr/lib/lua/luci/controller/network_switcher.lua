@@ -1,128 +1,154 @@
-m = Map("network_switcher", "网络切换器配置", 
-    "一个智能的网络接口切换器，支持自动故障切换和定时切换功能。")
+module("luci.controller.network_switcher", package.seeall)
 
--- 服务控制部分
-local service_s = m:section(TypedSection, "_service", "服务控制")
-service_s.anonymous = true
+function index()
+    if not nixio.fs.access("/etc/config/network_switcher") then
+        return
+    end
+    
+    entry({"admin", "services", "network_switcher"}, firstchild(), "网络切换器", 60).dependent = false
+    entry({"admin", "services", "network_switcher", "overview"}, template("network_switcher/overview"), "概览", 1)
+    entry({"admin", "services", "network_switcher", "settings"}, cbi("network_switcher/network_switcher"), "设置", 2)
+    entry({"admin", "services", "network_switcher", "log"}, template("network_switcher/log"), "日志", 3)
+    
+    -- AJAX 接口
+    entry({"admin", "services", "network_switcher", "status"}, call("action_status"))
+    entry({"admin", "services", "network_switcher", "switch"}, call("action_switch"))
+    entry({"admin", "services", "network_switcher", "test"}, call("action_test"))
+    entry({"admin", "services", "network_switcher", "get_log"}, call("action_get_log"))
+    entry({"admin", "services", "network_switcher", "service_control"}, call("action_service_control"))
+    entry({"admin", "services", "network_switcher", "clear_log"}, call("action_clear_log"))
+    entry({"admin", "services", "network_switcher", "get_interfaces"}, call("action_get_interfaces"))
+end
 
--- 全局设置
-s = m:section(TypedSection, "settings", "全局设置")
-s.anonymous = true
-s.addremove = false
+function action_status()
+    local lucihttp = require("luci.http")
+    local sys = require("luci.sys")
+    
+    local response = {}
+    
+    -- 获取服务状态
+    local service_output = sys.exec("/usr/bin/network_switcher status 2>/dev/null | head -1")
+    if service_output:match("运行中") then
+        response.service = "running"
+    else
+        response.service = "stopped"
+    end
+    
+    -- 执行状态检查
+    local status_output = sys.exec("/usr/bin/network_switcher status 2>/dev/null")
+    response.status_output = status_output
+    
+    lucihttp.prepare_content("application/json")
+    lucihttp.write_json(response)
+end
 
-enabled = s:option(Flag, "enabled", "启用服务", 
-    "启用网络切换器服务")
-enabled.default = "0"
+function action_switch()
+    local lucihttp = require("luci.http")
+    local sys = require("luci.sys")
+    
+    local interface = lucihttp.formvalue("interface")
+    local response = {}
+    
+    if interface then
+        -- 实时执行并获取输出
+        local handle = io.popen("/usr/bin/network_switcher switch " .. interface .. " 2>&1")
+        local result = handle:read("*a")
+        handle:close()
+        
+        response.success = true
+        response.message = result
+    else
+        response.success = false
+        response.message = "无效的接口"
+    end
+    
+    lucihttp.prepare_content("application/json")
+    lucihttp.write_json(response)
+end
 
-operation_mode = s:option(ListValue, "operation_mode", "运行模式", 
-    "选择运行模式")
-operation_mode:value("auto", "自动模式 (故障切换)")
-operation_mode:value("manual", "手动模式")
-operation_mode.default = "auto"
+function action_test()
+    local lucihttp = require("luci.http")
+    local sys = require("luci.sys")
+    
+    -- 实时执行测试
+    local handle = io.popen("/usr/bin/network_switcher test 2>&1")
+    local result = handle:read("*a")
+    handle:close()
+    
+    local response = {
+        success = true,
+        output = result
+    }
+    
+    lucihttp.prepare_content("application/json")
+    lucihttp.write_json(response)
+end
 
-check_interval = s:option(Value, "check_interval", "检查间隔(秒)", 
-    "网络检查的时间间隔(仅自动模式)")
-check_interval.datatype = "uinteger"
-check_interval.default = "60"
-check_interval.placeholder = "60"
-check_interval:depends("operation_mode", "auto")
+function action_get_log()
+    local lucihttp = require("luci.http")
+    local sys = require("luci.sys")
+    local nixio = require("nixio")
+    
+    local log_content = ""
+    local log_file = "/var/log/network_switcher.log"
+    
+    if nixio.fs.access(log_file) then
+        log_content = sys.exec("tail -n 100 " .. log_file)
+    else
+        log_content = "日志文件不存在或为空"
+    end
+    
+    lucihttp.prepare_content("text/plain")
+    lucihttp.write(log_content)
+end
 
--- 网络测试设置
-local test_title = s:option(DummyValue, "test_settings", "网络测试设置")
-test_title.default = ""
+function action_service_control()
+    local lucihttp = require("luci.http")
+    local sys = require("luci.sys")
+    
+    local action = lucihttp.formvalue("action")
+    local response = {}
+    
+    if action == "start" or action == "stop" or action == "restart" then
+        local result = sys.exec("/usr/bin/network_switcher " .. action .. " 2>&1")
+        response.success = true
+        response.message = result
+    else
+        response.success = false
+        response.message = "无效的操作"
+    end
+    
+    lucihttp.prepare_content("application/json")
+    lucihttp.write_json(response)
+end
 
-ping_targets = s:option(DynamicList, "ping_targets", "Ping目标", 
-    "用于测试连通性的IP地址(每行一个)")
-ping_targets.default = "8.8.8.8 1.1.1.1 223.5.5.5 114.114.114.114"
-ping_targets.placeholder = "8.8.8.8"
+function action_clear_log()
+    local lucihttp = require("luci.http")
+    local sys = require("luci.sys")
+    
+    local result = sys.exec("/usr/bin/network_switcher clear_log 2>&1")
+    local response = {
+        success = true,
+        message = result
+    }
+    
+    lucihttp.prepare_content("application/json")
+    lucihttp.write_json(response)
+end
 
-ping_count = s:option(Value, "ping_count", "Ping次数", 
-    "每次测试发送的ping包数量(1-10)")
-ping_count.datatype = "range(1,10)"
-ping_count.default = "3"
-ping_count.placeholder = "3"
-
-ping_timeout = s:option(Value, "ping_timeout", "Ping超时(秒)", 
-    "每次ping尝试的超时时间(1-10)")
-ping_timeout.datatype = "range(1,10)"
-ping_timeout.default = "3"
-ping_timeout.placeholder = "3"
-
-switch_wait_time = s:option(Value, "switch_wait_time", "切换等待时间(秒)", 
-    "切换后验证前的等待时间(1-10)")
-switch_wait_time.datatype = "range(1,10)"
-switch_wait_time.default = "3"
-switch_wait_time.placeholder = "3"
-
--- 获取可用接口
-local uci = require("luci.model.uci").cursor()
-local interface_list = { "wan", "wwan" }
-
--- 从网络配置获取更多接口
-uci:foreach("network", "interface",
-    function(section)
-        if section[".name"] ~= "loopback" and section[".name"] ~= "wan" and section[".name"] ~= "wwan" then
-            table.insert(interface_list, section[".name"])
+function action_get_interfaces()
+    local lucihttp = require("luci.http")
+    local sys = require("luci.sys")
+    
+    local interfaces = sys.exec("/usr/bin/network_switcher interfaces 2>/dev/null")
+    local interface_list = {}
+    
+    for line in interfaces:gmatch("[^\r\n]+") do
+        if line ~= "" then
+            table.insert(interface_list, line)
         end
     end
-)
-
--- 接口配置部分
-interfaces_s = m:section(TypedSection, "interface", "接口配置",
-    "配置网络接口用于切换。接口按优先级顺序使用(metric值越小优先级越高)。")
-interfaces_s.anonymous = true
-interfaces_s.addremove = true
-interfaces_s.template = "cbi/tblsection"
-
-enabled = interfaces_s:option(Flag, "enabled", "启用")
-enabled.default = "1"
-
-iface_name = interfaces_s:option(ListValue, "interface", "接口名称")
-for _, iface in ipairs(interface_list) do
-    iface_name:value(iface, iface)
+    
+    lucihttp.prepare_content("application/json")
+    lucihttp.write_json(interface_list)
 end
-
-metric = interfaces_s:option(Value, "metric", "优先级", 
-    "metric值越小优先级越高(1-999)")
-metric.datatype = "range(1,999)"
-metric.default = "10"
-
--- 定时任务配置
-schedule_s = m:section(TypedSection, "schedule", "定时任务设置",
-    "配置定时接口切换。时间格式: HH:MM，目标可以是接口名称或'auto'。")
-schedule_s.anonymous = true
-schedule_s.addremove = false
-
-schedule_enabled = schedule_s:option(Flag, "enabled", "启用定时任务", 
-    "启用定时切换功能")
-schedule_enabled.default = "0"
-
-schedule_times = schedule_s:option(DynamicList, "times", "定时时间", 
-    "切换时间，HH:MM格式(每行一个)")
-schedule_times.default = "08:00 18:00"
-schedule_times.placeholder = "08:00"
-
-schedule_targets = schedule_s:option(DynamicList, "targets", "切换目标", 
-    "每个时间对应的目标接口，使用'auto'表示自动模式")
-schedule_targets.default = "auto wwan"
-schedule_targets.placeholder = "auto"
-
--- 快速操作部分
-local actions_s = m:section(TypedSection, "_actions", "快速操作")
-actions_s.anonymous = true
-
-local status_btn = actions_s:option(Button, "_status", "当前状态")
-status_btn.inputtitle = "刷新状态"
-status_btn.inputstyle = "apply"
-function status_btn.write()
-    luci.http.redirect(luci.dispatcher.build_url("admin/services/network_switcher/overview"))
-end
-
-local test_btn = actions_s:option(Button, "_test", "测试连通性")
-test_btn.inputtitle = "立即测试"
-test_btn.inputstyle = "apply"
-function test_btn.write()
-    luci.http.redirect(luci.dispatcher.build_url("admin/services/network_switcher/overview"))
-end
-
-return m
