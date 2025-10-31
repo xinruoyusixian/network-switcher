@@ -27,13 +27,6 @@
             </div>
             
             <div class="cbi-value">
-                <label class="cbi-value-title"><%:Operation Mode%></label>
-                <div class="cbi-value-field">
-                    <span id="operation-mode">-</span>
-                </div>
-            </div>
-            
-            <div class="cbi-value">
                 <label class="cbi-value-title"><%:Current Interface%></label>
                 <div class="cbi-value-field">
                     <span id="current-interface">-</span>
@@ -94,11 +87,7 @@ function refreshStatus() {
                 var response = JSON.parse(xhr.responseText);
                 
                 // 更新服务状态
-                updateServiceStatus(response.service, response.config.enabled);
-                
-                // 更新操作模式
-                document.getElementById('operation-mode').textContent = 
-                    response.config.operation_mode === 'auto' ? '自动模式' : '手动模式';
+                updateServiceStatus(response.service);
                 
                 // 从状态输出中提取当前接口
                 var statusText = response.status_output;
@@ -121,27 +110,22 @@ function refreshStatus() {
     xhr.send();
 }
 
-function updateServiceStatus(serviceStatus, configEnabled) {
+function updateServiceStatus(serviceStatus) {
     var statusElement = document.getElementById('service-status');
     var startBtn = document.getElementById('start-btn');
     var stopBtn = document.getElementById('stop-btn');
     var restartBtn = document.getElementById('restart-btn');
     
     if (serviceStatus === 'running') {
-        statusElement.innerHTML = '<span style="color: green">● <%:Running%></span>';
+        statusElement.innerHTML = '<span style="color: green">● 运行中</span>';
         startBtn.disabled = true;
         stopBtn.disabled = false;
         restartBtn.disabled = false;
     } else {
-        statusElement.innerHTML = '<span style="color: red">● <%:Stopped%></span>';
+        statusElement.innerHTML = '<span style="color: red">● 已停止</span>';
         startBtn.disabled = false;
         stopBtn.disabled = true;
         restartBtn.disabled = true;
-    }
-    
-    // 如果配置未启用，显示警告
-    if (configEnabled === '0') {
-        statusElement.innerHTML += ' <span style="color: orange">(<%:Disabled in config%>)</span>';
     }
 }
 
@@ -211,11 +195,11 @@ function runTest() {
 
 function switchInterface(interface) {
     if (interface === 'auto') {
-        if (!confirm('<%:Are you sure you want to run auto switch?%>')) {
+        if (!confirm('确定要执行自动切换吗?')) {
             return;
         }
     } else {
-        if (!confirm('<%:Are you sure you want to switch to%> ' + interface + '?')) {
+        if (!confirm('确定要切换到 ' + interface + '?')) {
             return;
         }
     }
