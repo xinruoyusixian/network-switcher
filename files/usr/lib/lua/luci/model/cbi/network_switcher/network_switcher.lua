@@ -9,10 +9,6 @@ s = m:section(TypedSection, "settings", "全局设置")
 s.anonymous = true
 s.addremove = false
 
-enabled = s:option(Flag, "enabled", "启用服务", 
-    "启用网络切换器服务")
-enabled.default = "0"
-
 operation_mode = s:option(ListValue, "operation_mode", "运行模式", 
     "选择运行模式")
 operation_mode:value("auto", "自动模式 (故障切换)")
@@ -29,13 +25,21 @@ check_interval:depends("operation_mode", "auto")
 -- 网络测试设置
 s:option(DummyValue, "test_settings", "网络测试设置")
 
-ping_targets = s:option(DynamicList, "ping_targets", "Ping目标", 
-    "用于测试连通性的IP地址(每行一个)")
-ping_targets.default = "8.8.8.8"
-ping_targets:value("8.8.8.8", "8.8.8.8 (Google)")
-ping_targets:value("1.1.1.1", "1.1.1.1 (Cloudflare)")
-ping_targets:value("223.5.5.5", "223.5.5.5 (阿里云)")
-ping_targets:value("114.114.114.114", "114.114.114.114 (114DNS)")
+ping_target1 = s:option(Value, "ping_target1", "Ping目标 1", "第一个测试目标IP")
+ping_target1.default = "8.8.8.8"
+ping_target1.placeholder = "8.8.8.8"
+
+ping_target2 = s:option(Value, "ping_target2", "Ping目标 2", "第二个测试目标IP")
+ping_target2.default = "1.1.1.1"
+ping_target2.placeholder = "1.1.1.1"
+
+ping_target3 = s:option(Value, "ping_target3", "Ping目标 3", "第三个测试目标IP")
+ping_target3.default = "223.5.5.5"
+ping_target3.placeholder = "223.5.5.5"
+
+ping_target4 = s:option(Value, "ping_target4", "Ping目标 4", "第四个测试目标IP")
+ping_target4.default = "114.114.114.114"
+ping_target4.placeholder = "114.114.114.114"
 
 ping_count = s:option(Value, "ping_count", "Ping次数", 
     "每次测试发送的ping包数量(1-10)")
@@ -116,22 +120,21 @@ for _, target in ipairs(target_list) do
     schedule_targets:value(target, target)
 end
 
--- 快速操作部分
-actions_s = m:section(TypedSection, "_actions", "快速操作")
-actions_s.anonymous = true
-
-status_btn = actions_s:option(Button, "_status", "当前状态")
-status_btn.inputtitle = "刷新状态"
-status_btn.inputstyle = "apply"
-function status_btn.write()
-    luci.http.redirect(luci.dispatcher.build_url("admin/services/network_switcher/overview"))
-end
-
-test_btn = actions_s:option(Button, "_test", "测试连通性")
-test_btn.inputtitle = "立即测试"
-test_btn.inputstyle = "apply"
-function test_btn.write()
-    luci.http.redirect(luci.dispatcher.build_url("admin/services/network_switcher/overview"))
+-- 保存前处理函数，将单个ping目标合并为列表
+function m.on_commit(self)
+    local ping_targets = {}
+    local target1 = ping_target1:formvalue("settings") or "8.8.8.8"
+    local target2 = ping_target2:formvalue("settings") or "1.1.1.1"
+    local target3 = ping_target3:formvalue("settings") or "223.5.5.5"
+    local target4 = ping_target4:formvalue("settings") or "114.114.114.114"
+    
+    if target1 and target1 ~= "" then table.insert(ping_targets, target1) end
+    if target2 and target2 ~= "" then table.insert(ping_targets, target2) end
+    if target3 and target3 ~= "" then table.insert(ping_targets, target3) end
+    if target4 and target4 ~= "" then table.insert(ping_targets, target4) end
+    
+    uci:set("network_switcher", "settings", "ping_targets", table.concat(ping_targets, " "))
+    uci:commit("network_switcher")
 end
 
 return m
