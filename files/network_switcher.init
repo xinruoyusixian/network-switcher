@@ -2,27 +2,88 @@
 
 START=99
 STOP=10
-
 USE_PROCD=1
 
-CONFIG="network_switcher"
 NAME="network_switcher"
+DAEMON="/usr/bin/network_switcher.sh"
+CONFIG="/etc/config/network_switcher"
+PIDFILE="/var/run/network_switcher.pid"
+LOGFILE="/var/log/network_switcher.log"
 
 start_service() {
+    echo "Starting network switcher service..."
+    
+    # 检查配置是否存在
+    if [ ! -f "$CONFIG" ]; then
+        echo "Error: Configuration file $CONFIG not found"
+        return 1
+    fi
+    
+    # 检查是否启用服务
+    local enabled=$(uci get network_switcher.settings.enabled 2>/dev/null || echo "1")
+    if [ "$enabled" = "0" ]; then
+        echo "Service is disabled in configuration"
+        return 0
+    fi
+    
     procd_open_instance
-    procd_set_param command /usr/bin/network_switcher daemon
+    procd_set_param command "$DAEMON" daemon
+    procd_set_param respawn
     procd_set_param stdout 1
     procd_set_param stderr 1
-    procd_set_param respawn
-    procd_set_param user root
+    procd_set_param pidfile "$PIDFILE"
     procd_close_instance
+    
+    echo "Network switcher service started"
 }
 
 stop_service() {
-    /usr/bin/network_switcher stop
+    echo "Stopping network switcher service..."
+    
+    if [ -f "$PIDFILE" ]; then
+        local pid=$(cat "$PIDFILE")
+        if [ -n "$pid" ]; then
+            kill "$pid" 2>/dev/null
+            echo "Stopped process $pid"
+        fi
+        rm -f "$PIDFILE"
+    fi
+    
+    # 确保没有残留进程
+    pkill -f "network_switcher.sh daemon"
+    
+    echo "Network switcher service stopped"
 }
 
-reload_service() {
+restart() {
     stop
+    sleep 2
     start
+}
+
+status() {
+    if [ -f "$PIDFILE" ]; then
+        local pid=$(cat "$PIDFILE")
+        if [ -d "/proc/$pid" ]; then
+            echo "Network switcher is running (PID: $pid)"
+            return 0
+        else
+            echo "Network switcher pid file exists but process not running"
+            rm -f "$PIDFILE"
+            return 1
+        fi
+    else
+        if pgrep -f "network_switcher.sh daemon" >/dev/null; then
+            echo "Network switcher is running (but no pid file)"
+            return 0
+        else
+            echo "Network switcher is not running"
+            return 3
+        fi
+    fi
+}
+
+reload() {
+    echo "Reloading configuration..."
+    restart
 }
